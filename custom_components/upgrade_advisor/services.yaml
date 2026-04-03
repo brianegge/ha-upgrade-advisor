@@ -1,0 +1,15 @@
+analyze:
+  name: Analyze available update
+  description: Trigger analysis of the currently available Home Assistant update.
+
+analyze_version:
+  name: Analyze specific version
+  description: Analyze a specific Home Assistant version's release notes against your configuration.
+  fields:
+    version:
+      name: Version
+      description: The Home Assistant version to analyze (e.g., 2024.12.0)
+      required: true
+      example: "2024.12.0"
+      selector:
+        text:

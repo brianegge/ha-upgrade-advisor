@@ -1,0 +1,29 @@
+{
+  "entity": {
+    "sensor": {
+      "status": {
+        "default": "mdi:update",
+        "state": {
+          "idle": "mdi:check-circle-outline",
+          "analyzing": "mdi:loading",
+          "report_ready": "mdi:clipboard-text",
+          "error": "mdi:alert-circle"
+        }
+      },
+      "risk": {
+        "default": "mdi:shield-half-full",
+        "state": {
+          "unknown": "mdi:shield-outline",
+          "low": "mdi:shield-check",
+          "medium": "mdi:shield-alert",
+          "high": "mdi:shield-remove"
+        }
+      }
+    },
+    "event": {
+      "report": {
+        "default": "mdi:clipboard-text-clock"
+      }
+    }
+  }
+}
