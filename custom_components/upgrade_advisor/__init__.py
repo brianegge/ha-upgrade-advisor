@@ -31,7 +31,7 @@ from .const import (
     HA_CORE_UPDATE_ENTITY,
     PLATFORMS,
 )
-from .github import async_get_ha_release_notes, async_get_hacs_release_notes
+from .github import async_get_ha_release_notes_range, async_get_hacs_release_notes
 from .services import async_register_services, async_unregister_services
 from .summarize import build_installation_context
 
@@ -151,7 +151,8 @@ class UpgradeAdvisorCoordinator:
 
         # Fetch release notes
         if repo is None:
-            release_notes = await async_get_ha_release_notes(session, target_version)
+            # HA core: fetch all releases between current and target
+            release_notes = await async_get_ha_release_notes_range(session, current_version, target_version)
         else:
             release_notes = await async_get_hacs_release_notes(session, repo, target_version)
 
