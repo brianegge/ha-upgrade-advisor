@@ -1,0 +1,103 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Upgrade Advisor",
+        "description": "Select the AI conversation agent to use for analyzing upgrades.",
+        "data": {
+          "agent_id": "Conversation agent"
+        },
+        "data_description": {
+          "agent_id": "The AI agent that will analyze release notes against your configuration"
+        }
+      }
+    },
+    "error": {
+      "agent_not_found": "The selected conversation agent was not found"
+    },
+    "abort": {
+      "already_configured": "Upgrade Advisor is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Upgrade Advisor Options",
+        "data": {
+          "scan_on_update_available": "Analyze automatically when updates are available",
+          "scan_hacs_updates": "Analyze HACS component updates",
+          "create_repair_issues": "Create repair issues for breaking changes",
+          "include_automations": "Include automations in analysis context",
+          "include_addons": "Include add-ons in analysis context"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "idle": "Idle",
+          "analyzing": "Analyzing",
+          "report_ready": "Report ready",
+          "error": "Error"
+        }
+      },
+      "risk": {
+        "name": "Risk level",
+        "state": {
+          "unknown": "Unknown",
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
+      }
+    },
+    "event": {
+      "report": {
+        "name": "Report",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "report_generated": "Report generated"
+            }
+          }
+        }
+      }
+    }
+  },
+  "services": {
+    "analyze": {
+      "name": "Analyze available update",
+      "description": "Trigger analysis of the currently available Home Assistant update."
+    },
+    "analyze_version": {
+      "name": "Analyze specific version",
+      "description": "Analyze a specific Home Assistant version's release notes against your configuration.",
+      "fields": {
+        "version": {
+          "name": "Version",
+          "description": "The Home Assistant version to analyze (e.g., 2024.12.0)"
+        }
+      }
+    }
+  },
+  "issues": {
+    "breaking_changes_found": {
+      "title": "Breaking changes found for {component} {version}",
+      "description": "Upgrade Advisor found **{count} breaking change(s)** for {component} {version}.\n\nRisk level: **{risk}**\n\nCheck the Upgrade Advisor status sensor for the full report."
+    }
+  },
+  "exceptions": {
+    "no_update_available": {
+      "message": "No update is currently available to analyze"
+    },
+    "analysis_failed": {
+      "message": "Analysis failed: {error}"
+    },
+    "github_fetch_failed": {
+      "message": "Failed to fetch release notes from GitHub: {error}"
+    }
+  }
+}
