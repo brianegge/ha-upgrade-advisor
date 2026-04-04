@@ -212,12 +212,20 @@ class UpgradeAdvisorCoordinator:
         """Create notifications, repair issues, and fire events."""
         # Persistent notification
         title = f"Upgrade Advisor: {result.component_name} {result.current_version} → {result.target_version}"
-        message = (
-            f"**Risk: {result.risk_level.upper()}** | "
-            f"**Breaking changes: {result.breaking_change_count}**\n\n"
-            f"See Settings → Repairs for details, or add a Markdown card with:\n"
-            f'`{{{{ state_attr("sensor.upgrade_advisor_status", "report") }}}}`'
-        )
+        if result.breaking_change_count > 0:
+            message = (
+                f"**Risk: {result.risk_level.upper()}** | "
+                f"**Breaking changes: {result.breaking_change_count}**\n\n"
+                f"See Settings → Repairs for details, or add a Markdown card with:\n"
+                f'`{{{{ state_attr("sensor.upgrade_advisor_status", "report") }}}}`'
+            )
+        else:
+            message = (
+                f"**Risk: {result.risk_level.upper()}** | "
+                f"No breaking changes found for your installation.\n\n"
+                f"View the full report with a Markdown card:\n"
+                f'`{{{{ state_attr("sensor.upgrade_advisor_status", "report") }}}}`'
+            )
         async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_report")
 
         # Repair issues
