@@ -127,11 +127,13 @@ async def async_analyze(
     """Send the prompt to the AI agent and parse the response."""
     try:
         from homeassistant.components.conversation import async_converse
+        from homeassistant.core import Context
 
         response = await async_converse(
             hass=hass,
             text=prompt,
             conversation_id=None,
+            context=Context(),
             agent_id=agent_id,
         )
 

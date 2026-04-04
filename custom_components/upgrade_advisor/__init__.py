@@ -259,7 +259,8 @@ class UpgradeAdvisorCoordinator:
         for state in self.hass.states.async_all("update"):
             entity_id = state.entity_id
             # HACS update entities follow a naming pattern
-            if "hacs" not in entity_id and not state.attributes.get("release_url", "").startswith("https://github.com"):
+            release_url = state.attributes.get("release_url") or ""
+            if "hacs" not in entity_id and not release_url.startswith("https://github.com"):
                 continue
             name = state.attributes.get("friendly_name", entity_id)
             installed = state.attributes.get("installed_version", "?")
