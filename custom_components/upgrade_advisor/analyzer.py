@@ -92,18 +92,24 @@ results below, produce a concise upgrade report.
 IMPORTANT: Only report on checks that were actually performed. Do not add \
 information about integrations or breaking changes that were not checked.
 
-Produce a concise report. Include ONLY these sections, and OMIT any section \
-that would just say "None":
-1. **Pre-Upgrade Status** — results of backup check and current system health
-2. **Breaking Changes Verified** — for each check, state whether this installation \
+Produce a concise report. OMIT any section that would just say "None" or has \
+nothing useful. Include only:
+
+1. **Breaking Changes Verified** — for each check, state whether this installation \
 IS or IS NOT affected, with the specific evidence (e.g., "Searched 15 YAML files, \
 no object_id found" or "Found object_id in mqtt.yaml line 42")
-3. **Action Required** — only if the user ACTUALLY needs to do something. \
-If all checks passed, say "No action required — safe to upgrade."
-4. **Risk Assessment** — Low/Medium/High based on actual check results, not speculation
 
-Omit sections like "Prerequisites: None" or "Deprecations: None" — if there's \
-nothing to report, don't include the section at all.
+2. **Action Required** — split into "Before upgrading" and "After upgrading". \
+Only include items the user ACTUALLY needs to do. If all breaking change checks \
+passed, say "No action required before upgrading — safe to upgrade." \
+In "After upgrading", include NEW FEATURES and OPPORTUNITIES that are relevant \
+to installed integrations — things like new actions, new entity types, or new \
+capabilities the user could adopt. Reference the specific check results that \
+found relevant automations or entities. These are valuable even when there are \
+no breaking changes.
+
+3. **Risk Assessment** — ONLY include this section if the risk is Medium or High. \
+If risk is Low, omit the section entirely.
 
 Keep it short and factual. Lead with verdicts, not explanations.
 
