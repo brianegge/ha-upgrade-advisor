@@ -78,24 +78,40 @@ class UpgradeAdvisorCoordinator:
         return self.entry.options.get(key, default)
 
     async def async_analyze_available_update(self) -> None:
-        """Analyze the currently available HA core update."""
+        """Analyze all pending updates — HA core and HACS components."""
+        analyzed = False
+
+        # HA core update
         state = self.hass.states.get(HA_CORE_UPDATE_ENTITY)
-        if state is None or state.state != "on":
-            _LOGGER.warning("No HA core update available to analyze")
-            return
+        if state is not None and state.state == "on":
+            current = state.attributes.get("installed_version", "")
+            target = state.attributes.get("latest_version", "")
+            if target:
+                await self._run_analysis(
+                    upgrade_type="Home Assistant Core",
+                    component_name="Home Assistant",
+                    current_version=current,
+                    target_version=target,
+                    repo=None,
+                )
+                analyzed = True
 
-        current = state.attributes.get("installed_version", "")
-        target = state.attributes.get("latest_version", "")
-        if not target:
-            return
+        # HACS / other component updates
+        scan_hacs = self._get_option(CONF_SCAN_HACS, DEFAULT_SCAN_HACS)
+        if scan_hacs:
+            for update_state in self.hass.states.async_all("update"):
+                if update_state.entity_id == HA_CORE_UPDATE_ENTITY:
+                    continue
+                if update_state.state != "on":
+                    continue
+                release_url = update_state.attributes.get("release_url") or ""
+                if "github.com" not in release_url:
+                    continue
+                await self.async_analyze_hacs_update(update_state.entity_id)
+                analyzed = True
 
-        await self._run_analysis(
-            upgrade_type="Home Assistant Core",
-            component_name="Home Assistant",
-            current_version=current,
-            target_version=target,
-            repo=None,
-        )
+        if not analyzed:
+            _LOGGER.warning("No updates available to analyze")
 
     async def async_analyze_version(self, version: str) -> None:
         """Analyze a specific HA version."""
@@ -227,15 +243,17 @@ class UpgradeAdvisorCoordinator:
                 f"View the full report with a Markdown card:\n"
                 f'`{{{{ state_attr("sensor.upgrade_advisor_status", "report") }}}}`'
             )
-        async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_report")
+        # Use component name in notification_id so each update gets its own notification
+        safe_name = result.component_name.lower().replace(" ", "_")[:30]
+        async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}")
 
-        # Repair issues
+        # Repair issues — one per component+version
         create_repairs = self._get_option(CONF_CREATE_REPAIRS, DEFAULT_CREATE_REPAIRS)
         if create_repairs and result.breaking_change_count > 0:
             ir.async_create_issue(
                 self.hass,
                 domain=DOMAIN,
-                issue_id=f"breaking_changes_{result.target_version}",
+                issue_id=f"breaking_changes_{safe_name}_{result.target_version}",
                 is_fixable=False,
                 severity=ir.IssueSeverity.WARNING,
                 translation_key="breaking_changes_found",
