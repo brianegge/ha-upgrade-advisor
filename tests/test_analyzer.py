@@ -8,14 +8,14 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.upgrade_advisor.analyzer import (
     async_analyze,
-    build_prompt,
+    build_single_pass_prompt,
     parse_response,
 )
 
 
 def test_build_prompt_includes_all_sections() -> None:
     """Test prompt includes all required sections."""
-    prompt = build_prompt(
+    prompt = build_single_pass_prompt(
         upgrade_type="Home Assistant Core",
         component_name="Home Assistant",
         current_version="2024.11.0",

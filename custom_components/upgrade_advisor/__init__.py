@@ -14,7 +14,16 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .analyzer import AnalysisResult, async_analyze, build_prompt
+from .analyzer import (
+    AnalysisResult,
+    async_analyze,
+    async_converse_with_agent,
+    build_planning_prompt,
+    build_single_pass_prompt,
+    build_summary_prompt,
+    parse_response,
+)
+from .checker import async_run_checks, format_check_results, parse_check_tasks
 from .const import (
     CONF_AGENT_ID,
     CONF_CREATE_REPAIRS,
@@ -107,15 +116,9 @@ class UpgradeAdvisorCoordinator:
 
         # HA core update
         state = self.hass.states.get(HA_CORE_UPDATE_ENTITY)
-        _LOGGER.warning(
-            "HA core update entity: state=%s, entity=%s",
-            state.state if state else "NOT FOUND",
-            HA_CORE_UPDATE_ENTITY,
-        )
         if state is not None and state.state == "on":
             current = state.attributes.get("installed_version", "")
             target = state.attributes.get("latest_version", "")
-            _LOGGER.warning("HA core: %s -> %s", current, target)
             if target:
                 await self._run_analysis(
                     upgrade_type="Home Assistant Core",
@@ -179,6 +182,139 @@ class UpgradeAdvisorCoordinator:
             repo=repo,
         )
 
+    async def _run_two_phase_analysis(
+        self,
+        agent_id: str,
+        upgrade_type: str,
+        component_name: str,
+        current_version: str,
+        target_version: str,
+        release_notes: str,
+        context: dict[str, Any],
+        hacs_components: str,
+    ) -> AnalysisResult:
+        """Run the two-phase analysis: LLM plans checks, we execute them, LLM summarizes."""
+        # Phase 1: Ask LLM to plan checks
+        _LOGGER.info("Phase 1: Planning checks for %s %s → %s", component_name, current_version, target_version)
+        planning_prompt = build_planning_prompt(
+            upgrade_type=upgrade_type,
+            component_name=component_name,
+            current_version=current_version,
+            target_version=target_version,
+            release_notes=release_notes,
+            context=context,
+            hacs_components=hacs_components,
+        )
+
+        try:
+            planning_response = await async_converse_with_agent(self.hass, agent_id, planning_prompt)
+        except Exception:
+            _LOGGER.exception("Phase 1 failed, falling back to single-pass")
+            return await self._fallback_single_pass(
+                agent_id,
+                upgrade_type,
+                component_name,
+                current_version,
+                target_version,
+                release_notes,
+                context,
+                hacs_components,
+            )
+
+        # Parse check tasks from LLM response
+        tasks = parse_check_tasks(planning_response)
+        if not tasks:
+            _LOGGER.warning("No check tasks parsed, falling back to single-pass")
+            return await self._fallback_single_pass(
+                agent_id,
+                upgrade_type,
+                component_name,
+                current_version,
+                target_version,
+                release_notes,
+                context,
+                hacs_components,
+            )
+
+        _LOGGER.info("Phase 2: Running %d checks", len(tasks))
+
+        # Phase 2: Execute checks
+        check_results = await async_run_checks(self.hass, tasks)
+        results_text = format_check_results(check_results)
+
+        _LOGGER.info("Phase 3: Summarizing %d check results", len(check_results))
+
+        # Phase 3: Ask LLM to summarize the check results
+        summary_prompt = build_summary_prompt(
+            upgrade_type=upgrade_type,
+            component_name=component_name,
+            current_version=current_version,
+            target_version=target_version,
+            check_results=results_text,
+        )
+
+        try:
+            summary_response = await async_converse_with_agent(self.hass, agent_id, summary_prompt)
+        except Exception:
+            # If summary fails, use the raw check results as the report
+            _LOGGER.exception("Phase 3 failed, using raw check results")
+            failed_count = sum(1 for r in check_results if not r.passed)
+            return AnalysisResult(
+                report=(
+                    f"# {component_name} {current_version} → {target_version}"
+                    f"\n\n## Automated Check Results\n\n{results_text}"
+                ),
+                risk_level="medium" if failed_count > 0 else "low",
+                breaking_change_count=failed_count,
+                upgrade_type=upgrade_type,
+                component_name=component_name,
+                current_version=current_version,
+                target_version=target_version,
+            )
+
+        risk_level, breaking_count = parse_response(summary_response)
+
+        return AnalysisResult(
+            report=summary_response,
+            risk_level=risk_level,
+            breaking_change_count=breaking_count,
+            upgrade_type=upgrade_type,
+            component_name=component_name,
+            current_version=current_version,
+            target_version=target_version,
+        )
+
+    async def _fallback_single_pass(
+        self,
+        agent_id: str,
+        upgrade_type: str,
+        component_name: str,
+        current_version: str,
+        target_version: str,
+        release_notes: str,
+        context: dict[str, Any],
+        hacs_components: str,
+    ) -> AnalysisResult:
+        """Fall back to single-pass analysis if two-phase fails."""
+        prompt = build_single_pass_prompt(
+            upgrade_type=upgrade_type,
+            component_name=component_name,
+            current_version=current_version,
+            target_version=target_version,
+            release_notes=release_notes,
+            context=context,
+            hacs_components=hacs_components,
+        )
+        return await async_analyze(
+            self.hass,
+            agent_id,
+            prompt,
+            upgrade_type,
+            component_name,
+            current_version,
+            target_version,
+        )
+
     async def _run_analysis(
         self,
         upgrade_type: str,
@@ -213,28 +349,39 @@ class UpgradeAdvisorCoordinator:
         # Build HACS component list
         hacs_components = self._get_hacs_component_list()
 
-        # Build prompt
-        prompt = build_prompt(
-            upgrade_type=upgrade_type,
-            component_name=component_name,
-            current_version=current_version,
-            target_version=target_version,
-            release_notes=release_notes,
-            context=context,
-            hacs_components=hacs_components,
-        )
-
-        # Run analysis
         agent_id = self.entry.data[CONF_AGENT_ID]
-        result = await async_analyze(
-            self.hass,
-            agent_id,
-            prompt,
-            upgrade_type,
-            component_name,
-            current_version,
-            target_version,
-        )
+
+        # Use two-phase analysis for HA core, single-pass for HACS components
+        if repo is None:
+            result = await self._run_two_phase_analysis(
+                agent_id=agent_id,
+                upgrade_type=upgrade_type,
+                component_name=component_name,
+                current_version=current_version,
+                target_version=target_version,
+                release_notes=release_notes,
+                context=context,
+                hacs_components=hacs_components,
+            )
+        else:
+            prompt = build_single_pass_prompt(
+                upgrade_type=upgrade_type,
+                component_name=component_name,
+                current_version=current_version,
+                target_version=target_version,
+                release_notes=release_notes,
+                context=context,
+                hacs_components=hacs_components,
+            )
+            result = await async_analyze(
+                self.hass,
+                agent_id,
+                prompt,
+                upgrade_type,
+                component_name,
+                current_version,
+                target_version,
+            )
 
         # Store results
         self._store_result(result)
