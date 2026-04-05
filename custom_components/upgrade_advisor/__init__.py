@@ -27,11 +27,13 @@ from .checker import async_run_checks, format_check_results, parse_check_tasks
 from .const import (
     CONF_AGENT_ID,
     CONF_CREATE_REPAIRS,
+    CONF_DASHBOARD_PATH,
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
     DEFAULT_CREATE_REPAIRS,
+    DEFAULT_DASHBOARD_PATH,
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
     DEFAULT_SCAN_HACS,
@@ -410,20 +412,21 @@ class UpgradeAdvisorCoordinator:
         """Create notifications, repair issues, and fire events."""
         # Persistent notification
         title = f"Upgrade Advisor: {result.component_name} {result.current_version} → {result.target_version}"
+        dashboard_path = self._get_option(CONF_DASHBOARD_PATH, DEFAULT_DASHBOARD_PATH)
+        if dashboard_path:
+            dashboard_link = f"[View full report](/{dashboard_path})"
+        else:
+            dashboard_link = (
+                'View the full report with a Markdown card: `{{ state_attr("sensor.upgrade_advisor", "report") }}`'
+            )
         if result.breaking_change_count > 0:
             message = (
                 f"**Risk: {result.risk_level.upper()}** | "
                 f"**Breaking changes: {result.breaking_change_count}**\n\n"
-                f"See Settings → Repairs for details, or add a Markdown card with:\n"
-                f'`{{{{ state_attr("sensor.upgrade_advisor", "report") }}}}`'
+                f"{dashboard_link}"
             )
         else:
-            message = (
-                f"**Risk: {result.risk_level.upper()}** | "
-                f"No breaking changes found for your installation.\n\n"
-                f"View the full report with a Markdown card:\n"
-                f'`{{{{ state_attr("sensor.upgrade_advisor", "report") }}}}`'
-            )
+            message = f"**Risk: {result.risk_level.upper()}** | No breaking changes found.\n\n{dashboard_link}"
         # Use component name in notification_id so each update gets its own notification
         safe_name = result.component_name.lower().replace(" ", "_")[:30]
         async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}")

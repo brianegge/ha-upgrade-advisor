@@ -28,7 +28,8 @@
           "scan_hacs_updates": "Analyze HACS component updates",
           "create_repair_issues": "Create repair issues for breaking changes",
           "include_automations": "Include automations in analysis context",
-          "include_addons": "Include add-ons in analysis context"
+          "include_addons": "Include add-ons in analysis context",
+          "dashboard_path": "Dashboard URL path (e.g., upgrade-advisor)"
         }
       }
     }

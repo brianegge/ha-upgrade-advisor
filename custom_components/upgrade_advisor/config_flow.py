@@ -11,11 +11,13 @@ from homeassistant.config_entries import ConfigFlowResult
 from .const import (
     CONF_AGENT_ID,
     CONF_CREATE_REPAIRS,
+    CONF_DASHBOARD_PATH,
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
     DEFAULT_CREATE_REPAIRS,
+    DEFAULT_DASHBOARD_PATH,
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
     DEFAULT_SCAN_HACS,
@@ -103,6 +105,10 @@ class UpgradeAdvisorOptionsFlow(config_entries.OptionsFlow):
                         CONF_INCLUDE_ADDONS,
                         default=self.config_entry.options.get(CONF_INCLUDE_ADDONS, DEFAULT_INCLUDE_ADDONS),
                     ): bool,
+                    vol.Optional(
+                        CONF_DASHBOARD_PATH,
+                        default=self.config_entry.options.get(CONF_DASHBOARD_PATH, DEFAULT_DASHBOARD_PATH),
+                    ): str,
                 }
             ),
         )
