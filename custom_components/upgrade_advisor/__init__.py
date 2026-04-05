@@ -47,7 +47,7 @@ class UpgradeAdvisorCoordinator:
         self.entry = entry
         self._listeners: list[Any] = []
 
-        # State
+        # State — latest analysis
         self.status: str = "idle"
         self.risk_level: str = "unknown"
         self.report: str | None = None
@@ -55,6 +55,9 @@ class UpgradeAdvisorCoordinator:
         self.available_version: str | None = None
         self.last_analysis: str | None = None
         self.breaking_change_count: int = 0
+
+        # All reports from the current scan (keyed by component name)
+        self.reports: dict[str, AnalysisResult] = {}
 
     @callback
     def async_add_listener(self, listener: Any) -> Any:
@@ -99,6 +102,7 @@ class UpgradeAdvisorCoordinator:
 
     async def async_analyze_available_update(self) -> None:
         """Analyze all pending updates — HA core and HACS components."""
+        self.reports.clear()
         analyzed = False
 
         # HA core update
@@ -240,10 +244,34 @@ class UpgradeAdvisorCoordinator:
 
     def _store_result(self, result: AnalysisResult) -> None:
         """Store analysis results on the coordinator."""
-        self.report = result.report if not result.error else f"Error: {result.error}"
-        self.risk_level = result.risk_level
-        self.breaking_change_count = result.breaking_change_count
+        # Store per-component
+        self.reports[result.component_name] = result
+
+        # Update summary state from all reports
         self.last_analysis = datetime.now(tz=UTC).isoformat()
+        total_breaking = sum(r.breaking_change_count for r in self.reports.values() if not r.error)
+        self.breaking_change_count = total_breaking
+
+        # Set risk to highest across all reports
+        risk_order = {"unknown": 0, "low": 1, "medium": 2, "high": 3}
+        max_risk = max(
+            (risk_order.get(r.risk_level, 0) for r in self.reports.values() if not r.error),
+            default=0,
+        )
+        self.risk_level = {v: k for k, v in risk_order.items()}[max_risk]
+
+        # Build combined report
+        sections = []
+        for name, r in self.reports.items():
+            if r.error:
+                sections.append(f"# {name}\n\nError: {r.error}")
+            else:
+                sections.append(r.report)
+        self.report = "\n\n---\n\n".join(sections)
+
+        # Track latest component for version display
+        self.current_version = result.current_version
+        self.available_version = result.target_version
 
     async def _async_output_results(self, result: AnalysisResult) -> None:
         """Create notifications, repair issues, and fire events."""
