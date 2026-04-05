@@ -77,6 +77,26 @@ class UpgradeAdvisorCoordinator:
         """Get an option value with fallback to default."""
         return self.entry.options.get(key, default)
 
+    async def async_analyze_core_update(self) -> None:
+        """Analyze only the HA core update."""
+        state = self.hass.states.get(HA_CORE_UPDATE_ENTITY)
+        if state is None or state.state != "on":
+            _LOGGER.warning("No HA core update available to analyze")
+            return
+
+        current = state.attributes.get("installed_version", "")
+        target = state.attributes.get("latest_version", "")
+        if not target:
+            return
+
+        await self._run_analysis(
+            upgrade_type="Home Assistant Core",
+            component_name="Home Assistant",
+            current_version=current,
+            target_version=target,
+            repo=None,
+        )
+
     async def async_analyze_available_update(self) -> None:
         """Analyze all pending updates — HA core and HACS components."""
         analyzed = False
@@ -376,7 +396,7 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
         if entity_id == HA_CORE_UPDATE_ENTITY:
             scan_on_update = entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
             if scan_on_update:
-                hass.async_create_task(coordinator.async_analyze_available_update())
+                hass.async_create_task(coordinator.async_analyze_core_update())
         elif entry.options.get(CONF_SCAN_HACS, DEFAULT_SCAN_HACS):
             # HACS component update
             hass.async_create_task(coordinator.async_analyze_hacs_update(entity_id))
