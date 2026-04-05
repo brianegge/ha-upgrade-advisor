@@ -60,8 +60,19 @@ You can request these automated checks:
 
 ## Instructions
 IMPORTANT: Only create checks for integrations that ARE in the installed list above. \
-Skip all breaking changes for integrations that are not installed — do not create \
-checks for them and do not mention them.
+Do NOT create checks for integrations that are not installed. Do NOT create \
+`integration_installed` checks — we already know what's installed from the list above.
+
+Create checks in this order:
+1. `backup_recent` — always include this first
+2. Breaking change checks — `grep_config` and `automation_references` for each \
+   breaking change that affects an INSTALLED integration. Skip uninstalled ones entirely.
+3. New feature / opportunity checks — for each NEW FEATURE in the release notes \
+   that is relevant to an INSTALLED integration, create an `automation_references` \
+   or `entity_count` check to find existing usage that could benefit. Use severity \
+   "post_upgrade" and set `if_found` to describe the opportunity (e.g., "New lock \
+   code actions available — consider adopting in these automations"). These help \
+   the user discover post-upgrade improvements.
 
 Output a JSON array of check objects. Each object has:
 - `check`: one of the check types above
@@ -69,12 +80,9 @@ Output a JSON array of check objects. Each object has:
 - `severity`: "breaking", "warning", "info", or "post_upgrade"
 - `context`: why this check matters (reference the specific release note change)
 - `pattern`: regex pattern (for grep_config and automation_references)
-- `integration`: integration domain (for entity_available, integration_installed)
-- `if_found`: message if the check finds a match (what the user should do)
-- `if_not_found`: message if the check finds no match (why they're safe)
-
-Start with a `backup_recent` check, then checks for each breaking change that \
-could affect installed integrations, then a baseline `unavailable_entities` check.
+- `integration`: integration domain (for entity_available, entity_count)
+- `if_found`: message to show if check finds matches
+- `if_not_found`: message to show if check finds no matches
 
 Output ONLY the JSON array, no other text."""
 
