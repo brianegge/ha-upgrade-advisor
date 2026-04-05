@@ -19,7 +19,7 @@ DEFAULT_SCAN_HACS: Final = True
 DEFAULT_CREATE_REPAIRS: Final = True
 DEFAULT_INCLUDE_AUTOMATIONS: Final = True
 DEFAULT_INCLUDE_ADDONS: Final = True
-DEFAULT_DASHBOARD_PATH: Final = ""
+DEFAULT_DASHBOARD_PATH: Final = "upgrade-advisor"
 
 HA_CORE_UPDATE_ENTITY: Final = "update.home_assistant_core_update"
 HA_CORE_REPO: Final = "home-assistant/core"
