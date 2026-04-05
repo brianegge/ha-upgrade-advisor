@@ -107,9 +107,15 @@ class UpgradeAdvisorCoordinator:
 
         # HA core update
         state = self.hass.states.get(HA_CORE_UPDATE_ENTITY)
+        _LOGGER.warning(
+            "HA core update entity: state=%s, entity=%s",
+            state.state if state else "NOT FOUND",
+            HA_CORE_UPDATE_ENTITY,
+        )
         if state is not None and state.state == "on":
             current = state.attributes.get("installed_version", "")
             target = state.attributes.get("latest_version", "")
+            _LOGGER.warning("HA core: %s -> %s", current, target)
             if target:
                 await self._run_analysis(
                     upgrade_type="Home Assistant Core",
@@ -298,6 +304,9 @@ class UpgradeAdvisorCoordinator:
         # Repair issues — one per component+version
         create_repairs = self._get_option(CONF_CREATE_REPAIRS, DEFAULT_CREATE_REPAIRS)
         if create_repairs and result.breaking_change_count > 0:
+            # Delete first to force re-creation with current translations
+            issue_id = f"breaking_changes_{safe_name}_{result.target_version}"
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
             ir.async_create_issue(
                 self.hass,
                 domain=DOMAIN,
