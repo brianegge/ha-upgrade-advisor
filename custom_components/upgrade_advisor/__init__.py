@@ -377,58 +377,67 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 @callback
 def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator: UpgradeAdvisorCoordinator) -> None:
-    """Set up listeners for update entity state changes."""
-    entities_to_watch = [HA_CORE_UPDATE_ENTITY]
+    """Set up listeners for update entity state changes.
+
+    On startup, entities transition from None → current state, which looks like a
+    new update. Instead of reacting to each one individually (causing races), we
+    track whether startup has completed and handle the two cases differently:
+    - Startup: ignore individual transitions, run one sequential scan of all updates
+    - Runtime: react to individual transitions as they happen
+    """
+    startup_complete = False
 
     @callback
     def _on_update_available(event: Event) -> None:
-        """Handle update entity state change."""
+        """Handle update entity state change (HA core only)."""
+        if not startup_complete:
+            return
         new_state = event.data.get("new_state")
         old_state = event.data.get("old_state")
-
         if new_state is None or new_state.state != "on":
             return
         if old_state is not None and old_state.state == "on":
-            return  # Already had update available, not a new transition
+            return
+        scan_on_update = entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
+        if scan_on_update:
+            hass.async_create_task(coordinator.async_analyze_core_update())
 
-        entity_id = event.data.get("entity_id", "")
-
-        if entity_id == HA_CORE_UPDATE_ENTITY:
-            scan_on_update = entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
-            if scan_on_update:
-                hass.async_create_task(coordinator.async_analyze_core_update())
-        elif entry.options.get(CONF_SCAN_HACS, DEFAULT_SCAN_HACS):
-            # HACS component update
-            hass.async_create_task(coordinator.async_analyze_hacs_update(entity_id))
-
-    # Watch HA core update entity
-    entry.async_on_unload(async_track_state_change_event(hass, entities_to_watch, _on_update_available))
-
-    # Also watch for any new HACS update entities dynamically
     @callback
     def _on_any_state_change(event: Event) -> None:
-        """Watch for HACS update entities becoming available."""
+        """Watch for HACS update entities becoming available at runtime."""
+        if not startup_complete:
+            return
         entity_id = event.data.get("entity_id", "")
         if not entity_id.startswith("update.") or entity_id == HA_CORE_UPDATE_ENTITY:
             return
-
         new_state = event.data.get("new_state")
         old_state = event.data.get("old_state")
-
         if new_state is None or new_state.state != "on":
             return
         if old_state is not None and old_state.state == "on":
             return
-
-        # Check if this looks like a HACS entity
-        release_url = new_state.attributes.get("release_url", "")
+        release_url = new_state.attributes.get("release_url") or ""
         if "github.com" not in release_url:
             return
-
         if entry.options.get(CONF_SCAN_HACS, DEFAULT_SCAN_HACS):
             hass.async_create_task(coordinator.async_analyze_hacs_update(entity_id))
 
+    entry.async_on_unload(async_track_state_change_event(hass, [HA_CORE_UPDATE_ENTITY], _on_update_available))
     entry.async_on_unload(hass.bus.async_listen("state_changed", _on_any_state_change))
+
+    async def _startup_scan(_event: Event | None = None) -> None:
+        """Run a single sequential scan of all pending updates after startup."""
+        nonlocal startup_complete
+        scan_on_update = entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
+        if scan_on_update:
+            await coordinator.async_analyze_available_update()
+        startup_complete = True
+
+    # Run the startup scan after HA is fully started
+    if hass.is_running:
+        hass.async_create_task(_startup_scan())
+    else:
+        hass.bus.async_listen_once("homeassistant_started", _startup_scan)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
