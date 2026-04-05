@@ -141,32 +141,36 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
     regex = re.compile(pattern, re.IGNORECASE)
     matches: list[str] = []
 
-    # Search YAML files in config directory (non-recursive for top-level,
-    # recursive for packages/ and integrations/)
-    yaml_files = list(config_dir.glob("*.yaml"))
-    yaml_files.extend(config_dir.glob("packages/**/*.yaml"))
-    yaml_files.extend(config_dir.glob("integrations/**/*.yaml"))
-    yaml_files.extend(config_dir.glob("mqtt/**/*.yaml"))
+    # Search YAML config files
+    search_files: list[Path] = list(config_dir.glob("*.yaml"))
+    search_files.extend(config_dir.glob("packages/**/*.yaml"))
+    search_files.extend(config_dir.glob("integrations/**/*.yaml"))
+    search_files.extend(config_dir.glob("mqtt/**/*.yaml"))
 
-    # Also check specific subdirs that might have MQTT config
-    for subdir in ["", "packages", "integrations", "mqtt"]:
-        subpath = config_dir / subdir if subdir else config_dir
-        if subpath.is_dir():
-            for yaml_file in subpath.glob("*.yaml"):
-                if yaml_file not in yaml_files:
-                    yaml_files.append(yaml_file)
+    # Also search Lovelace dashboard storage (JSON) for UI-configured settings
+    storage_dir = config_dir / ".storage"
+    if storage_dir.is_dir():
+        search_files.extend(storage_dir.glob("lovelace.*"))
+
+    # Deduplicate
+    seen: set[Path] = set()
+    unique_files: list[Path] = []
+    for f in search_files:
+        if f not in seen:
+            seen.add(f)
+            unique_files.append(f)
 
     files_searched = 0
-    for yaml_file in yaml_files:
-        # Skip huge files and hidden files
-        if yaml_file.name.startswith(".") or yaml_file.stat().st_size > 1_000_000:
+    for search_file in unique_files:
+        # Skip huge files (>2MB)
+        if search_file.stat().st_size > 2_000_000:
             continue
         try:
-            content = await hass.async_add_executor_job(yaml_file.read_text)
+            content = await hass.async_add_executor_job(search_file.read_text)
             files_searched += 1
             for line_num, line in enumerate(content.split("\n"), 1):
                 if regex.search(line):
-                    relative = yaml_file.relative_to(config_dir)
+                    relative = search_file.relative_to(config_dir)
                     matches.append(f"{relative}:{line_num}: {line.strip()}")
         except Exception:
             continue

@@ -351,37 +351,17 @@ class UpgradeAdvisorCoordinator:
 
         agent_id = self.entry.data[CONF_AGENT_ID]
 
-        # Use two-phase analysis for HA core, single-pass for HACS components
-        if repo is None:
-            result = await self._run_two_phase_analysis(
-                agent_id=agent_id,
-                upgrade_type=upgrade_type,
-                component_name=component_name,
-                current_version=current_version,
-                target_version=target_version,
-                release_notes=release_notes,
-                context=context,
-                hacs_components=hacs_components,
-            )
-        else:
-            prompt = build_single_pass_prompt(
-                upgrade_type=upgrade_type,
-                component_name=component_name,
-                current_version=current_version,
-                target_version=target_version,
-                release_notes=release_notes,
-                context=context,
-                hacs_components=hacs_components,
-            )
-            result = await async_analyze(
-                self.hass,
-                agent_id,
-                prompt,
-                upgrade_type,
-                component_name,
-                current_version,
-                target_version,
-            )
+        # Two-phase analysis for all updates
+        result = await self._run_two_phase_analysis(
+            agent_id=agent_id,
+            upgrade_type=upgrade_type,
+            component_name=component_name,
+            current_version=current_version,
+            target_version=target_version,
+            release_notes=release_notes,
+            context=context,
+            hacs_components=hacs_components,
+        )
 
         # Store results
         self._store_result(result)
