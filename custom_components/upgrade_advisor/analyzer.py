@@ -12,9 +12,8 @@ from homeassistant.core import HomeAssistant
 _LOGGER = logging.getLogger(__name__)
 
 # Phase 1: Ask the LLM to produce structured check tasks
-PLANNING_PROMPT = """You are a Home Assistant upgrade advisor. Analyze the release notes below \
-and produce a list of AUTOMATED CHECKS to verify whether each breaking change, \
-deprecation, or prerequisite actually affects this specific installation.
+PLANNING_PROMPT = """You are a Home Assistant upgrade advisor. Analyze the release notes \
+and produce AUTOMATED CHECKS for this specific installation.
 
 ## Upgrade
 {upgrade_type}: {component_name} {current_version} → {target_version}
@@ -22,7 +21,7 @@ deprecation, or prerequisite actually affects this specific installation.
 ## Release Notes
 {release_notes}
 
-## Installed Integrations
+## ENABLED Integrations (ONLY these are installed)
 {integrations}
 
 ## Devices by Integration
@@ -31,58 +30,50 @@ deprecation, or prerequisite actually affects this specific installation.
 ## HACS Components
 {hacs_components}
 
+## CRITICAL RULE
+The integrations listed above are the ONLY ones installed. If a breaking change \
+or new feature mentions an integration NOT in that list, SKIP IT COMPLETELY. \
+Do not create any check for it. Do not mention it. For example, if the release \
+notes mention Litter-Robot, Tuya, BMW, JVC Projector, or Roth Touchline but \
+none of those appear in the installed list above, do not create checks for them.
+
 ## Available Check Types
-You can request these automated checks:
 
-1. `grep_config` — Search YAML config files for a pattern
-   Params: `pattern` (regex), `files` (glob, default *.yaml)
-   Use for: deprecated config keys, removed options, renamed settings
-
-2. `entity_available` — Check if entities for an integration are available
-   Params: `integration` (domain name like "mqtt", "zwave_js")
-   Use for: verifying integration health before/after upgrade
-
-3. `integration_installed` — Check if an integration is installed
-   Params: `integration` (domain name)
-   Use for: filtering out breaking changes for uninstalled integrations
-
-4. `automation_references` — Search automation YAML for a pattern
+1. `grep_config` — Search YAML config files and Lovelace dashboards for a pattern
    Params: `pattern` (regex)
-   Use for: finding automations that use deprecated services/entities
+   Use for: deprecated config keys, removed options
 
-5. `unavailable_entities` — List unavailable entities, optionally filtered
-   Params: `integration` (optional domain filter)
-   Use for: pre-upgrade baseline of broken entities
+2. `automation_references` — Search automation YAML for a pattern
+   Params: `pattern` (regex)
+   Use for: finding automations using deprecated or newly enhanced services/entities
 
-6. `backup_recent` — Verify a recent backup exists
-   Params: none
-   Use for: pre-upgrade safety check
+3. `entity_available` — Check if entities for an integration are available
+   Params: `integration` (domain name)
 
-## Instructions
-IMPORTANT: Only create checks for integrations that ARE in the installed list above. \
-Do NOT create checks for integrations that are not installed. Do NOT create \
-`integration_installed` checks — we already know what's installed from the list above.
+4. `entity_count` — Count entities for an integration
+   Params: `integration` (domain name)
+
+5. `backup_recent` — Verify a recent backup exists
+
+## Output
+
+JSON array of check objects with these fields:
+- `check`: check type from above
+- `title`: short description
+- `severity`: "breaking", "warning", or "post_upgrade"
+- `context`: why this matters (include the PR number or link from release notes if available)
+- `pattern`: regex (for grep_config and automation_references)
+- `integration`: domain name (for entity_available, entity_count)
+- `if_found`: message if matches found
+- `if_not_found`: message if no matches
 
 Create checks in this order:
-1. `backup_recent` — always include this first
-2. Breaking change checks — `grep_config` and `automation_references` for each \
-   breaking change that affects an INSTALLED integration. Skip uninstalled ones entirely.
-3. New feature / opportunity checks — for each NEW FEATURE in the release notes \
-   that is relevant to an INSTALLED integration, create an `automation_references` \
-   or `entity_count` check to find existing usage that could benefit. Use severity \
-   "post_upgrade" and set `if_found` to describe the opportunity (e.g., "New lock \
-   code actions available — consider adopting in these automations"). These help \
-   the user discover post-upgrade improvements.
-
-Output a JSON array of check objects. Each object has:
-- `check`: one of the check types above
-- `title`: short human-readable description
-- `severity`: "breaking", "warning", "info", or "post_upgrade"
-- `context`: why this check matters (reference the specific release note change)
-- `pattern`: regex pattern (for grep_config and automation_references)
-- `integration`: integration domain (for entity_available, entity_count)
-- `if_found`: message to show if check finds matches
-- `if_not_found`: message to show if check finds no matches
+1. `backup_recent`
+2. Breaking changes — ONLY for integrations in the installed list
+3. New features / opportunities — for each new feature relevant to an INSTALLED \
+   integration, check for existing usage. Use severity "post_upgrade". Include \
+   the PR link or release note reference in `context`. Set `if_found` to describe \
+   the opportunity.
 
 Output ONLY the JSON array, no other text."""
 
@@ -97,29 +88,27 @@ results below, produce a concise upgrade report.
 {check_results}
 
 ## Instructions
-IMPORTANT: Only report on checks that were actually performed. Do not add \
-information about integrations or breaking changes that were not checked.
+ONLY report on checks that were actually performed. Do not mention integrations \
+that were not checked. OMIT any section that would be empty.
 
-Produce a concise report. OMIT any section that would just say "None" or has \
-nothing useful. Include only:
+Structure the report as follows:
 
-1. **Breaking Changes Verified** — for each check, state whether this installation \
-IS or IS NOT affected, with the specific evidence (e.g., "Searched 15 YAML files, \
-no object_id found" or "Found object_id in mqtt.yaml line 42")
+1. **What's New For You** — Lead with this section. List new features and \
+   opportunities from the post_upgrade checks, with evidence from the check \
+   results. For each, include what's new, which of your devices/automations \
+   benefit, and the PR or release note reference from the check context. \
+   Only include features for integrations that had checks performed.
 
-2. **Action Required** — split into "Before upgrading" and "After upgrading". \
-Only include items the user ACTUALLY needs to do. If all breaking change checks \
-passed, say "No action required before upgrading — safe to upgrade." \
-In "After upgrading", include NEW FEATURES and OPPORTUNITIES that are relevant \
-to installed integrations — things like new actions, new entity types, or new \
-capabilities the user could adopt. Reference the specific check results that \
-found relevant automations or entities. These are valuable even when there are \
-no breaking changes.
+2. **Breaking Changes** — Table of breaking change checks with status and \
+   evidence. Only include checks that were actually run. If all passed, \
+   summarize in one line: "All breaking change checks passed — safe to upgrade."
 
-3. **Risk Assessment** — ONLY include this section if the risk is Medium or High. \
-If risk is Low, omit the section entirely.
+3. **Action Required** — Only if something ACTUALLY needs to be done \
+   before upgrading. Omit if all checks passed.
 
-Keep it short and factual. Lead with verdicts, not explanations.
+4. **Risk Assessment** — ONLY if risk is Medium or High. Omit for Low risk.
+
+Keep it short and factual.
 
 End your response with:
 RISK_LEVEL: <Low|Medium|High>
