@@ -76,7 +76,7 @@ Display the full report on your dashboard with a Markdown card:
 ```yaml
 type: markdown
 content: >-
-  {{ state_attr('sensor.upgrade_advisor_status', 'report') }}
+  {{ state_attr('sensor.upgrade_advisor', 'report') }}
 ```
 
 ## How It Works
@@ -101,7 +101,7 @@ automation:
   - alias: "Notify on upgrade report"
     trigger:
       - platform: state
-        entity_id: sensor.upgrade_advisor_status
+        entity_id: sensor.upgrade_advisor
         to: "report_ready"
     action:
       - service: notify.mobile_app
@@ -109,7 +109,7 @@ automation:
           title: "Upgrade Advisor Report"
           message: >-
             Risk: {{ states('sensor.upgrade_advisor_risk_level') }}
-            Breaking changes: {{ state_attr('sensor.upgrade_advisor_status', 'breaking_change_count') }}
+            Breaking changes: {{ state_attr('sensor.upgrade_advisor', 'breaking_change_count') }}
 ```
 
 ### Analyze a specific version

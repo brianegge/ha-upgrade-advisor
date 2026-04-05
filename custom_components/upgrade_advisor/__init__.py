@@ -288,14 +288,14 @@ class UpgradeAdvisorCoordinator:
                 f"**Risk: {result.risk_level.upper()}** | "
                 f"**Breaking changes: {result.breaking_change_count}**\n\n"
                 f"See Settings → Repairs for details, or add a Markdown card with:\n"
-                f'`{{{{ state_attr("sensor.upgrade_advisor_status", "report") }}}}`'
+                f'`{{{{ state_attr("sensor.upgrade_advisor", "report") }}}}`'
             )
         else:
             message = (
                 f"**Risk: {result.risk_level.upper()}** | "
                 f"No breaking changes found for your installation.\n\n"
                 f"View the full report with a Markdown card:\n"
-                f'`{{{{ state_attr("sensor.upgrade_advisor_status", "report") }}}}`'
+                f'`{{{{ state_attr("sensor.upgrade_advisor", "report") }}}}`'
             )
         # Use component name in notification_id so each update gets its own notification
         safe_name = result.component_name.lower().replace(" ", "_")[:30]
