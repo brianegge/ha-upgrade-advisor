@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,7 +105,6 @@ async def _run_single_check(hass: HomeAssistant, task: CheckTask) -> CheckResult
     dispatch = {
         "grep_config": _check_grep_config,
         "entity_available": _check_entity_available,
-        "integration_installed": _check_integration_installed,
         "automation_references": _check_automation_references,
         "unavailable_entities": _check_unavailable_entities,
         "backup_recent": _check_backup_recent,
@@ -199,6 +199,16 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
     )
 
 
+def _get_entity_ids_for_integration(hass: HomeAssistant, integration: str) -> list[str]:
+    """Get all entity IDs belonging to an integration using the entity registry."""
+    ent_reg = er.async_get(hass)
+    entity_ids: list[str] = []
+    for entity in ent_reg.entities.values():
+        if entity.platform == integration and not entity.disabled:
+            entity_ids.append(entity.entity_id)
+    return entity_ids
+
+
 async def _check_entity_available(hass: HomeAssistant, task: CheckTask) -> CheckResult:
     """Check if entities for an integration are available."""
     integration = task.integration
@@ -211,36 +221,32 @@ async def _check_entity_available(hass: HomeAssistant, task: CheckTask) -> Check
             severity=task.severity,
         )
 
-    all_states = hass.states.async_all()
-    total = 0
-    unavailable = 0
+    entity_ids = _get_entity_ids_for_integration(hass, integration)
+    total = len(entity_ids)
     unavailable_list: list[str] = []
 
-    for state in all_states:
-        # Match by platform (entity_id prefix) or by checking config entries
-        if integration in state.entity_id or state.attributes.get("platform") == integration:
-            total += 1
-            if state.state == "unavailable":
-                unavailable += 1
-                unavailable_list.append(state.entity_id)
+    for eid in entity_ids:
+        state = hass.states.get(eid)
+        if state is None or state.state == "unavailable":
+            unavailable_list.append(eid)
 
     if total == 0:
         return CheckResult(
             check_id="entity_available",
             title=task.title,
             passed=True,
-            detail=f"No entities found for '{integration}'",
+            detail=f"No entities found for '{integration}' in entity registry",
             severity=task.severity,
         )
 
-    if unavailable > 0:
+    if unavailable_list:
         sample = ", ".join(unavailable_list[:5])
-        extra = f" and {unavailable - 5} more" if unavailable > 5 else ""
+        extra = f" and {len(unavailable_list) - 5} more" if len(unavailable_list) > 5 else ""
         return CheckResult(
             check_id="entity_available",
             title=task.title,
             passed=False,
-            detail=f"{unavailable}/{total} entities unavailable for '{integration}': {sample}{extra}",
+            detail=(f"{len(unavailable_list)}/{total} entities unavailable for '{integration}': {sample}{extra}"),
             severity=task.severity,
         )
 
@@ -249,30 +255,6 @@ async def _check_entity_available(hass: HomeAssistant, task: CheckTask) -> Check
         title=task.title,
         passed=True,
         detail=f"All {total} entities for '{integration}' are available",
-        severity=task.severity,
-    )
-
-
-async def _check_integration_installed(hass: HomeAssistant, task: CheckTask) -> CheckResult:
-    """Check if a specific integration is installed."""
-    integration = task.integration
-    entries = hass.config_entries.async_entries()
-    installed = any(e.domain == integration for e in entries)
-
-    if installed:
-        return CheckResult(
-            check_id="integration_installed",
-            title=task.title,
-            passed=True,
-            detail=f"Integration '{integration}' is installed.\n\n{task.if_found}",
-            severity=task.severity,
-        )
-
-    return CheckResult(
-        check_id="integration_installed",
-        title=task.title,
-        passed=True,  # Not installed = not affected = pass
-        detail=f"Integration '{integration}' is not installed — not affected.\n\n{task.if_not_found}",
         severity=task.severity,
     )
 
@@ -341,15 +323,23 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
 async def _check_unavailable_entities(hass: HomeAssistant, task: CheckTask) -> CheckResult:
     """Count unavailable entities, optionally filtered by integration."""
     integration = task.integration
-    all_states = hass.states.async_all()
 
-    unavailable: list[str] = []
-    for state in all_states:
-        if state.state != "unavailable":
-            continue
-        if integration and integration not in state.entity_id:
-            continue
-        unavailable.append(f"{state.entity_id} ({state.attributes.get('friendly_name', '')})")
+    if integration:
+        # Use entity registry for accurate filtering
+        entity_ids = _get_entity_ids_for_integration(hass, integration)
+        unavailable: list[str] = []
+        for eid in entity_ids:
+            state = hass.states.get(eid)
+            if state is None or state.state == "unavailable":
+                name = state.attributes.get("friendly_name", "") if state else ""
+                unavailable.append(f"{eid} ({name})" if name else eid)
+    else:
+        # Count all unavailable entities
+        unavailable = []
+        for state in hass.states.async_all():
+            if state.state == "unavailable":
+                name = state.attributes.get("friendly_name", "")
+                unavailable.append(f"{state.entity_id} ({name})" if name else state.entity_id)
 
     scope = f" for '{integration}'" if integration else ""
     if unavailable:
@@ -423,7 +413,7 @@ async def _check_service_exists(hass: HomeAssistant, task: CheckTask) -> CheckRe
 
 
 async def _check_entity_count(hass: HomeAssistant, task: CheckTask) -> CheckResult:
-    """Count entities for an integration."""
+    """Count entities for an integration using the entity registry."""
     integration = task.integration
     if not integration:
         return CheckResult(
@@ -434,13 +424,22 @@ async def _check_entity_count(hass: HomeAssistant, task: CheckTask) -> CheckResu
             severity=task.severity,
         )
 
-    count = sum(1 for s in hass.states.async_all() if integration in s.entity_id)
+    entity_ids = _get_entity_ids_for_integration(hass, integration)
+    count = len(entity_ids)
+
+    # Include a sample of entity IDs for context
+    if count > 0:
+        sample = ", ".join(entity_ids[:5])
+        extra = f" and {count - 5} more" if count > 5 else ""
+        detail = f"Found {count} entities for '{integration}': {sample}{extra}"
+    else:
+        detail = f"No entities found for '{integration}'"
 
     return CheckResult(
         check_id="entity_count",
         title=task.title,
         passed=True,
-        detail=f"Found {count} entities for '{integration}'",
+        detail=f"{detail}\n\n{task.if_found if count > 0 else task.if_not_found}",
         severity=task.severity,
     )
 
