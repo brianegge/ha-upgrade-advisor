@@ -36,13 +36,20 @@ against this user's installation and produce a report.
 {hacs_components}
 
 ## Instructions
+IMPORTANT: Only include items that affect THIS installation. Do NOT mention \
+integrations, devices, or services that are not present in the lists above. \
+If a breaking change applies to an integration this user does not have installed, \
+skip it entirely — do not include it with a "not affected" note.
+
 Produce a report with these sections:
-1. **Breaking Changes** — changes that WILL affect this installation, with specific \
-entity/device/automation references where possible
+1. **Breaking Changes** — changes that WILL affect this installation. Only list \
+changes for integrations/platforms that appear in the installed integrations or \
+devices lists above. Omit all others completely.
 2. **Prerequisites** — things that must be done BEFORE upgrading (especially for \
 HACS components that document prerequisites in their release notes)
-3. **Deprecations** — things that still work but should be migrated
-4. **New Features** — relevant new capabilities for installed integrations
+3. **Deprecations** — things that still work but should be migrated, only for \
+installed integrations
+4. **New Features** — relevant new capabilities for installed integrations only
 5. **Recommended Actions** — ordered checklist of what to do before/after upgrading
 6. **Risk Assessment** — Low/Medium/High with brief justification
 
@@ -51,6 +58,8 @@ For each breaking change, include:
 - What specifically breaks
 - What action the user must take
 - Whether it must be done before or after the upgrade
+
+If there are no breaking changes for this installation, say so clearly and briefly.
 
 End your response with a line in this exact format:
 RISK_LEVEL: <Low|Medium|High>
