@@ -5,6 +5,8 @@
 
 AI-powered upgrade analysis for Home Assistant. When an update is available, the integration fetches the release notes, asks your AI agent to identify what could break, then **automatically verifies each potential issue** against your actual configuration — searching your YAML files, checking entity availability, and auditing automations. The result is a report that tells you what IS affected, not what MIGHT be.
 
+![Example upgrade report](example-output.png)
+
 ## Features
 
 - **Two-phase analysis** — AI identifies potential issues, then the integration verifies them automatically
