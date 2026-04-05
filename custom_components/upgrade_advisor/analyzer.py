@@ -92,14 +92,18 @@ results below, produce a concise upgrade report.
 IMPORTANT: Only report on checks that were actually performed. Do not add \
 information about integrations or breaking changes that were not checked.
 
-Produce a concise report with these sections:
+Produce a concise report. Include ONLY these sections, and OMIT any section \
+that would just say "None":
 1. **Pre-Upgrade Status** — results of backup check and current system health
 2. **Breaking Changes Verified** — for each check, state whether this installation \
 IS or IS NOT affected, with the specific evidence (e.g., "Searched 15 YAML files, \
 no object_id found" or "Found object_id in mqtt.yaml line 42")
-3. **Action Required** — only list actions the user ACTUALLY needs to take based \
-on check results. If all checks passed, say "No action required — safe to upgrade."
+3. **Action Required** — only if the user ACTUALLY needs to do something. \
+If all checks passed, say "No action required — safe to upgrade."
 4. **Risk Assessment** — Low/Medium/High based on actual check results, not speculation
+
+Omit sections like "Prerequisites: None" or "Deprecations: None" — if there's \
+nothing to report, don't include the section at all.
 
 Keep it short and factual. Lead with verdicts, not explanations.
 
