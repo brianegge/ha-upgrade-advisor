@@ -311,9 +311,34 @@ def _extract_repo_from_url(url: str) -> str | None:
     return None
 
 
+def _cleanup_stale_repairs(hass: HomeAssistant) -> None:
+    """Remove repair issues from older versions that used different issue_id formats."""
+    issue_reg = ir.async_get(hass)
+    stale = [
+        issue_id
+        for (domain, issue_id) in issue_reg.issues
+        if domain == DOMAIN and not issue_id.startswith("breaking_changes_")
+    ]
+    # Also clean up old format: "breaking_changes_{version}" (no component name)
+    for domain, issue_id in issue_reg.issues:
+        if domain == DOMAIN and issue_id.startswith("breaking_changes_"):
+            # Old format had just version like "breaking_changes_2026.4.0"
+            # New format has component: "breaking_changes_home_assistant_2026.4.0"
+            parts = issue_id.replace("breaking_changes_", "").split("_")
+            # If it looks like just a version number (starts with digit), it's old format
+            if parts and parts[0][:1].isdigit():
+                stale.append(issue_id)
+    for issue_id in stale:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        _LOGGER.info("Cleaned up stale repair issue: %s", issue_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Upgrade Advisor from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    # Clean up stale repair issues from older versions that used different issue_id formats
+    _cleanup_stale_repairs(hass)
 
     coordinator = UpgradeAdvisorCoordinator(hass, entry)
     hass.data[DOMAIN][entry.entry_id] = {"coordinator": coordinator}
