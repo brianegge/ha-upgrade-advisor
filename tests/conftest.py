@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant import loader
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, mock_component
 
 from custom_components.upgrade_advisor.const import CONF_AGENT_ID, DOMAIN
 
@@ -20,8 +20,9 @@ MOCK_CONFIG = {
 
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(hass: HomeAssistant) -> None:
-    """Enable custom integrations in all tests."""
+    """Enable custom integrations and mark conversation as set up."""
     hass.data.pop(loader.DATA_CUSTOM_COMPONENTS)
+    mock_component(hass, "conversation")
 
 
 @pytest.fixture
