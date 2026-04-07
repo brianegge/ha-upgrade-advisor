@@ -1,7 +1,7 @@
 {
   "domain": "upgrade_advisor",
   "name": "Upgrade Advisor",
-  "after_dependencies": ["conversation"],
+  "dependencies": ["conversation"],
   "codeowners": ["@brianegge"],
   "config_flow": true,
   "documentation": "https://github.com/brianegge/ha-upgrade-advisor",
