@@ -1,9 +1,13 @@
 {
   "domain": "upgrade_advisor",
   "name": "Upgrade Advisor",
-  "codeowners": ["@brianegge"],
+  "codeowners": [
+    "@brianegge"
+  ],
   "config_flow": true,
-  "dependencies": ["conversation"],
+  "dependencies": [
+    "conversation"
+  ],
   "documentation": "https://github.com/brianegge/ha-upgrade-advisor",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/brianegge/ha-upgrade-advisor/issues",
