@@ -14,7 +14,7 @@ from custom_components.upgrade_advisor.const import CONF_AGENT_ID, DOMAIN
 from .conftest import MOCK_AGENT_ID, MOCK_CONFIG
 
 
-async def test_user_flow_shows_form(hass: HomeAssistant) -> None:
+async def test_user_flow_shows_form(hass: HomeAssistant, mock_conversation_agent) -> None:
     """Test that the user flow shows a form initially."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     assert result["type"] is FlowResultType.FORM

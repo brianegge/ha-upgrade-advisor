@@ -7,6 +7,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.helpers.selector import SelectOptionDict, SelectSelector, SelectSelectorConfig
 
 from .const import (
     CONF_AGENT_ID,
@@ -53,14 +54,28 @@ class UpgradeAdvisorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={CONF_AGENT_ID: agent_id},
                 )
 
-        from homeassistant.helpers.selector import ConversationAgentSelector, ConversationAgentSelectorConfig
+        # Build agent options dynamically
+        from homeassistant.components.conversation import async_get_agent_info
+
+        agent_options = []
+        for state in self.hass.states.async_all("conversation"):
+            agent_id = state.entity_id
+            info = async_get_agent_info(self.hass, agent_id)
+            if info:
+                agent_options.append(SelectOptionDict(value=info.id, label=info.name))
+
+        if not agent_options:
+            agent_options.append(SelectOptionDict(value="homeassistant", label="Home Assistant"))
 
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_AGENT_ID): ConversationAgentSelector(
-                        ConversationAgentSelectorConfig(),
+                    vol.Required(CONF_AGENT_ID): SelectSelector(
+                        SelectSelectorConfig(
+                            options=agent_options,
+                            mode="dropdown",
+                        ),
                     ),
                 }
             ),
