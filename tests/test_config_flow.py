@@ -35,7 +35,7 @@ async def test_user_flow_success(hass: HomeAssistant, mock_conversation_agent) -
     assert result["data"] == MOCK_CONFIG
 
 
-async def test_user_flow_agent_not_found(hass: HomeAssistant) -> None:
+async def test_user_flow_agent_not_found(hass: HomeAssistant, mock_conversation_agent) -> None:
     """Test user flow with invalid agent shows error."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
@@ -45,7 +45,7 @@ async def test_user_flow_agent_not_found(hass: HomeAssistant) -> None:
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input={CONF_AGENT_ID: "conversation.nonexistent"},
+            user_input={CONF_AGENT_ID: MOCK_AGENT_ID},
         )
 
     assert result["type"] is FlowResultType.FORM
