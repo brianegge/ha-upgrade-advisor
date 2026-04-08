@@ -39,11 +39,13 @@ def mock_config_entry(hass: HomeAssistant) -> MockConfigEntry:
 
 
 @pytest.fixture
-def mock_conversation_agent():
-    """Mock conversation agent info."""
+def mock_conversation_agent(hass: HomeAssistant):
+    """Mock conversation agent info and state."""
     agent_info = MagicMock()
     agent_info.name = "Mock AI Agent"
     agent_info.id = MOCK_AGENT_ID
+
+    hass.states.async_set(MOCK_AGENT_ID, "idle")
 
     with patch(
         "homeassistant.components.conversation.async_get_agent_info",
