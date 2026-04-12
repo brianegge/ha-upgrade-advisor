@@ -372,6 +372,7 @@ class UpgradeAdvisorCoordinator:
         # Output results
         if result.error:
             self.status = "error"
+            await self._async_output_error(result)
         else:
             self.status = "report_ready"
             await self._async_output_results(result)
@@ -469,6 +470,13 @@ class UpgradeAdvisorCoordinator:
                     "report": result.report,
                 }
             )
+
+    async def _async_output_error(self, result: AnalysisResult) -> None:
+        """Create a notification when analysis fails."""
+        safe_name = result.component_name.lower().replace(" ", "_")[:30]
+        title = f"Upgrade Advisor: {result.component_name} analysis failed"
+        message = f"**Error:** {result.error}"
+        async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}_error")
 
     def _get_hacs_component_list(self) -> str:
         """Get a list of installed HACS components from update entities."""
