@@ -14,17 +14,34 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Check for existing release today
+        id: daily_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          today=$(date -u +%Y-%m-%d)
+          latest=$(gh api repos/${{ github.repository }}/releases/latest --jq .published_at 2>/dev/null || echo "")
+          if [[ "$latest" == "$today"* ]]; then
+            echo "Already released today ($latest), skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v6
+        if: steps.daily_check.outputs.skip != 'true'
         with:
           fetch-depth: 0
 
       - name: Get current version
+        if: steps.daily_check.outputs.skip != 'true'
         id: current
         run: |
           version=$(jq -r .version custom_components/upgrade_advisor/manifest.json)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Check if release already exists
+        if: steps.daily_check.outputs.skip != 'true'
         id: check
         run: |
           if gh release view "v${{ steps.current.outputs.version }}" > /dev/null 2>&1; then
@@ -36,7 +53,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Bump patch version
-        if: steps.check.outputs.exists == 'true'
+        if: steps.daily_check.outputs.skip != 'true'
         id: bump
         run: |
           IFS='.' read -r major minor patch <<< "${{ steps.current.outputs.version }}"
@@ -44,6 +61,7 @@ jobs:
           echo "version=$new_version" >> "$GITHUB_OUTPUT"
 
       - name: Determine release version
+        if: steps.daily_check.outputs.skip != 'true'
         id: version
         run: |
           if [ "${{ steps.check.outputs.exists }}" = "true" ]; then
@@ -53,12 +71,14 @@ jobs:
           fi
 
       - name: Update manifest version
+        if: steps.daily_check.outputs.skip != 'true'
         run: |
           jq --arg v "${{ steps.version.outputs.version }}" '.version = $v' \
             custom_components/upgrade_advisor/manifest.json > tmp.json
           mv tmp.json custom_components/upgrade_advisor/manifest.json
 
       - name: Commit version bump
+        if: steps.daily_check.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -68,11 +88,13 @@ jobs:
           git push
 
       - name: Create release zip
+        if: steps.daily_check.outputs.skip != 'true'
         run: |
           cd custom_components/upgrade_advisor
           zip -r ../../upgrade-advisor.zip .
 
       - name: Create GitHub Release
+        if: steps.daily_check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ steps.version.outputs.version }}"

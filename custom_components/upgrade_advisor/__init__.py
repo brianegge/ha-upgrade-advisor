@@ -12,7 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
 from .analyzer import (
     AnalysisResult,
@@ -41,6 +41,7 @@ from .const import (
     DOMAIN,
     HA_CORE_UPDATE_ENTITY,
     PLATFORMS,
+    STARTUP_DELAY_SECONDS,
 )
 from .github import async_get_ha_release_notes_range, async_get_hacs_release_notes
 from .services import async_register_services, async_unregister_services
@@ -146,7 +147,7 @@ class UpgradeAdvisorCoordinator:
                 analyzed = True
 
         if not analyzed:
-            _LOGGER.warning("No updates available to analyze")
+            _LOGGER.debug("No updates available to analyze")
 
     async def async_analyze_version(self, version: str) -> None:
         """Analyze a specific HA version."""
@@ -371,6 +372,7 @@ class UpgradeAdvisorCoordinator:
         # Output results
         if result.error:
             self.status = "error"
+            await self._async_output_error(result)
         else:
             self.status = "report_ready"
             await self._async_output_results(result)
@@ -395,13 +397,14 @@ class UpgradeAdvisorCoordinator:
         )
         self.risk_level = {v: k for k, v in risk_order.items()}[max_risk]
 
-        # Build combined report
+        # Build combined report with anchors for deep-linking from notifications
         sections = []
         for name, r in self.reports.items():
+            anchor = _component_anchor(name)
             if r.error:
-                sections.append(f"# {name}\n\nError: {r.error}")
+                sections.append(f'<a id="{anchor}"></a>\n\n# {name}\n\nError: {r.error}')
             else:
-                sections.append(r.report)
+                sections.append(f'<a id="{anchor}"></a>\n\n{r.report}')
         self.report = "\n\n---\n\n".join(sections)
 
         # Track latest component for version display
@@ -413,8 +416,9 @@ class UpgradeAdvisorCoordinator:
         # Persistent notification
         title = f"Upgrade Advisor: {result.component_name} {result.current_version} → {result.target_version}"
         dashboard_path = self._get_option(CONF_DASHBOARD_PATH, DEFAULT_DASHBOARD_PATH)
+        anchor = _component_anchor(result.component_name)
         if dashboard_path:
-            dashboard_link = f"[View full report](/{dashboard_path})"
+            dashboard_link = f"[View full report](/{dashboard_path}#{anchor})"
         else:
             dashboard_link = (
                 'View the full report with a Markdown card: `{{ state_attr("sensor.upgrade_advisor", "report") }}`'
@@ -467,6 +471,13 @@ class UpgradeAdvisorCoordinator:
                 }
             )
 
+    async def _async_output_error(self, result: AnalysisResult) -> None:
+        """Create a notification when analysis fails."""
+        safe_name = result.component_name.lower().replace(" ", "_")[:30]
+        title = f"Upgrade Advisor: {result.component_name} analysis failed"
+        message = f"**Error:** {result.error}"
+        async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}_error")
+
     def _get_hacs_component_list(self) -> str:
         """Get a list of installed HACS components from update entities."""
         lines: list[str] = []
@@ -482,6 +493,11 @@ class UpgradeAdvisorCoordinator:
             lines.append(f"- {name}: {installed}{update_available}")
 
         return "\n".join(lines) if lines else "No HACS components detected."
+
+
+def _component_anchor(name: str) -> str:
+    """Build a URL-safe anchor ID from a component name."""
+    return name.lower().replace(" ", "-")
 
 
 def _extract_repo_from_url(url: str) -> str | None:
@@ -592,19 +608,31 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
     entry.async_on_unload(async_track_state_change_event(hass, [HA_CORE_UPDATE_ENTITY], _on_update_available))
     entry.async_on_unload(hass.bus.async_listen("state_changed", _on_any_state_change))
 
-    async def _startup_scan(_event: Event | None = None) -> None:
-        """Run a single sequential scan of all pending updates after startup."""
+    async def _run_startup_scan(_now: Any = None) -> None:
+        """Run a single sequential scan of all pending updates."""
+        nonlocal startup_complete
+        await coordinator.async_analyze_available_update()
+        startup_complete = True
+
+    @callback
+    def _schedule_startup_scan(_event: Event | None = None) -> None:
+        """Schedule the startup scan after a delay for entities to become available."""
         nonlocal startup_complete
         scan_on_update = entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
-        if scan_on_update:
-            await coordinator.async_analyze_available_update()
-        startup_complete = True
+        if not scan_on_update:
+            startup_complete = True
+            return
+        _LOGGER.debug(
+            "Scheduling startup scan in %d seconds to allow entities to initialize",
+            STARTUP_DELAY_SECONDS,
+        )
+        entry.async_on_unload(async_call_later(hass, STARTUP_DELAY_SECONDS, _run_startup_scan))
 
     # Run the startup scan after HA is fully started
     if hass.is_running:
-        hass.async_create_task(_startup_scan())
+        _schedule_startup_scan()
     else:
-        hass.bus.async_listen_once("homeassistant_started", _startup_scan)
+        hass.bus.async_listen_once("homeassistant_started", _schedule_startup_scan)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

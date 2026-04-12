@@ -21,6 +21,8 @@ DEFAULT_INCLUDE_AUTOMATIONS: Final = True
 DEFAULT_INCLUDE_ADDONS: Final = True
 DEFAULT_DASHBOARD_PATH: Final = ""
 
+STARTUP_DELAY_SECONDS: Final = 300  # Wait 5 minutes for entities to become available
+
 HA_CORE_UPDATE_ENTITY: Final = "update.home_assistant_core_update"
 HA_CORE_REPO: Final = "home-assistant/core"
 GITHUB_API_BASE: Final = "https://api.github.com"
