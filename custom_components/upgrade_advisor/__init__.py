@@ -146,7 +146,7 @@ class UpgradeAdvisorCoordinator:
                 analyzed = True
 
         if not analyzed:
-            _LOGGER.warning("No updates available to analyze")
+            _LOGGER.debug("No updates available to analyze")
 
     async def async_analyze_version(self, version: str) -> None:
         """Analyze a specific HA version."""
