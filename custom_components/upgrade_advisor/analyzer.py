@@ -15,6 +15,10 @@ _LOGGER = logging.getLogger(__name__)
 PLANNING_PROMPT = """You are a Home Assistant upgrade advisor. Analyze the release notes \
 and produce AUTOMATED CHECKS for this specific installation.
 
+IMPORTANT: The upgrade has NOT been applied yet. All checks run against the \
+CURRENT (pre-upgrade) state. Do NOT describe results as "verified post-upgrade" \
+— they reflect current working state before any changes are made.
+
 ## Upgrade
 {upgrade_type}: {component_name} {current_version} → {target_version}
 
@@ -41,19 +45,21 @@ none of those appear in the installed list above, do not create checks for them.
 
 1. `grep_config` — Search YAML config files and Lovelace dashboards for a pattern
    Params: `pattern` (regex)
-   Use for: deprecated config keys, removed options
+   Use for: deprecated config keys, removed options, services that are being changed
 
 2. `automation_references` — Search automation YAML for a pattern
    Params: `pattern` (regex)
    Use for: finding automations using deprecated or newly enhanced services/entities
 
-3. `entity_available` — Check if entities for an integration are available
+3. `entity_count` — Count entities for an integration
    Params: `integration` (domain name)
+   Use for: confirming an integration is actively used
 
-4. `entity_count` — Count entities for an integration
-   Params: `integration` (domain name)
+4. `backup_recent` — Verify a recent backup exists
 
-5. `backup_recent` — Verify a recent backup exists
+5. `service_exists` — Check if a specific service exists
+   Params: `pattern` (e.g. "light.turn_on")
+   Use for: verifying services that may be renamed or removed
 
 ## Output
 
@@ -62,8 +68,8 @@ JSON array of check objects with these fields:
 - `title`: short description
 - `severity`: "breaking", "warning", or "post_upgrade"
 - `context`: why this matters (include the PR number or link from release notes if available)
-- `pattern`: regex (for grep_config and automation_references)
-- `integration`: domain name (for entity_available, entity_count)
+- `pattern`: regex (for grep_config, automation_references, service_exists)
+- `integration`: domain name (for entity_count)
 - `if_found`: message if matches found
 - `if_not_found`: message if no matches
 
@@ -79,7 +85,12 @@ Output ONLY the JSON array, no other text."""
 
 # Phase 2: Summarize the check results into a final report
 SUMMARY_PROMPT = """You are a Home Assistant upgrade advisor. Based on the automated check \
-results below, produce a concise upgrade report.
+results below, produce a concise PRE-UPGRADE report.
+
+IMPORTANT: The upgrade has NOT been applied yet. All check results reflect the \
+CURRENT state BEFORE upgrading. Do NOT say entities were "verified post-upgrade" \
+or "confirmed healthy after upgrade" — the upgrade hasn't happened. Instead, say \
+things like "currently working" or "X entities active pre-upgrade".
 
 ## Upgrade
 {upgrade_type}: {component_name} {current_version} → {target_version}
