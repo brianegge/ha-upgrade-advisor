@@ -396,13 +396,14 @@ class UpgradeAdvisorCoordinator:
         )
         self.risk_level = {v: k for k, v in risk_order.items()}[max_risk]
 
-        # Build combined report
+        # Build combined report with anchors for deep-linking from notifications
         sections = []
         for name, r in self.reports.items():
+            anchor = _component_anchor(name)
             if r.error:
-                sections.append(f"# {name}\n\nError: {r.error}")
+                sections.append(f'<a id="{anchor}"></a>\n\n# {name}\n\nError: {r.error}')
             else:
-                sections.append(r.report)
+                sections.append(f'<a id="{anchor}"></a>\n\n{r.report}')
         self.report = "\n\n---\n\n".join(sections)
 
         # Track latest component for version display
@@ -414,8 +415,9 @@ class UpgradeAdvisorCoordinator:
         # Persistent notification
         title = f"Upgrade Advisor: {result.component_name} {result.current_version} → {result.target_version}"
         dashboard_path = self._get_option(CONF_DASHBOARD_PATH, DEFAULT_DASHBOARD_PATH)
+        anchor = _component_anchor(result.component_name)
         if dashboard_path:
-            dashboard_link = f"[View full report](/{dashboard_path})"
+            dashboard_link = f"[View full report](/{dashboard_path}#{anchor})"
         else:
             dashboard_link = (
                 'View the full report with a Markdown card: `{{ state_attr("sensor.upgrade_advisor", "report") }}`'
@@ -483,6 +485,11 @@ class UpgradeAdvisorCoordinator:
             lines.append(f"- {name}: {installed}{update_available}")
 
         return "\n".join(lines) if lines else "No HACS components detected."
+
+
+def _component_anchor(name: str) -> str:
+    """Build a URL-safe anchor ID from a component name."""
+    return name.lower().replace(" ", "-")
 
 
 def _extract_repo_from_url(url: str) -> str | None:
