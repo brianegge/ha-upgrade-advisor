@@ -12,5 +12,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/brianegge/ha-upgrade-advisor/issues",
   "requirements": [],
-  "version": "1.0.3"
+  "version": "1.0.4"
 }
