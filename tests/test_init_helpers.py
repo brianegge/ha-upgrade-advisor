@@ -191,12 +191,12 @@ async def test_startup_delay_uses_async_call_later(hass: HomeAssistant) -> None:
 
 
 async def test_startup_no_scan_when_disabled(hass: HomeAssistant) -> None:
-    """Test that startup scan is skipped when scan_on_update is disabled."""
+    """Test that startup scan is skipped when both pre- and post-upgrade are disabled."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Mock AI Agent",
         data={CONF_AGENT_ID: MOCK_AGENT_ID},
-        options={"scan_on_update_available": False},
+        options={"scan_on_update_available": False, "post_upgrade_check": False},
         unique_id=DOMAIN,
     )
     entry.add_to_hass(hass)
@@ -209,3 +209,24 @@ async def test_startup_no_scan_when_disabled(hass: HomeAssistant) -> None:
         await hass.async_block_till_done()
 
     mock_call_later.assert_not_called()
+
+
+async def test_startup_scan_runs_for_post_upgrade_only(hass: HomeAssistant) -> None:
+    """Startup scan should still be scheduled when only post-upgrade check is enabled."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Mock AI Agent",
+        data={CONF_AGENT_ID: MOCK_AGENT_ID},
+        options={"scan_on_update_available": False, "post_upgrade_check": True},
+        unique_id=DOMAIN,
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.upgrade_advisor.async_call_later",
+        return_value=MagicMock(),
+    ) as mock_call_later:
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    mock_call_later.assert_called_once()

@@ -88,6 +88,13 @@ def async_summarize_devices(hass: HomeAssistant) -> str:
 
         lines.append(f"\n### {integration} ({total_devices} device{'s' if total_devices != 1 else ''})")
 
+        integration_domains: Counter[str] = Counter()
+        if integration in integration_models:
+            for dm in integration_models[integration].values():
+                integration_domains.update(dm.entity_domains)
+        if integration_domains:
+            lines.append(f"  entities by domain: {_format_entity_domains(integration_domains)}")
+
         for model_name in sorted(models.keys()):
             count = len(models[model_name])
             entity_info = ""

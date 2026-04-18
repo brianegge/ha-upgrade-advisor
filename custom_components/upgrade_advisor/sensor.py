@@ -82,6 +82,11 @@ class UpgradeAdvisorStatusSensor(UpgradeAdvisorSensorBase):
         }
         if self.coordinator.report:
             attrs["report"] = self.coordinator.report
+        if getattr(self.coordinator, "post_upgrade_report", None):
+            attrs["post_upgrade_report"] = self.coordinator.post_upgrade_report
+            attrs["post_upgrade_status"] = self.coordinator.post_upgrade_status
+            attrs["post_upgrade_regressions"] = self.coordinator.post_upgrade_regressions
+            attrs["last_post_upgrade_check"] = self.coordinator.last_post_upgrade_check
         return attrs
 
 

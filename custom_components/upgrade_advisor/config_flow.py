@@ -15,12 +15,14 @@ from .const import (
     CONF_DASHBOARD_PATH,
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
+    CONF_POST_UPGRADE_CHECK,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
     DEFAULT_CREATE_REPAIRS,
     DEFAULT_DASHBOARD_PATH,
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
+    DEFAULT_POST_UPGRADE_CHECK,
     DEFAULT_SCAN_HACS,
     DEFAULT_SCAN_ON_UPDATE,
     DOMAIN,
@@ -107,6 +109,10 @@ class UpgradeAdvisorOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_SCAN_HACS,
                         default=self.config_entry.options.get(CONF_SCAN_HACS, DEFAULT_SCAN_HACS),
+                    ): bool,
+                    vol.Required(
+                        CONF_POST_UPGRADE_CHECK,
+                        default=self.config_entry.options.get(CONF_POST_UPGRADE_CHECK, DEFAULT_POST_UPGRADE_CHECK),
                     ): bool,
                     vol.Required(
                         CONF_CREATE_REPAIRS,

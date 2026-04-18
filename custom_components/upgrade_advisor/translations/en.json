@@ -26,6 +26,7 @@
         "data": {
           "scan_on_update_available": "Analyze automatically when updates are available",
           "scan_hacs_updates": "Analyze HACS component updates",
+          "post_upgrade_check": "Verify upgrades after they land (re-run checks post-upgrade)",
           "create_repair_issues": "Create repair issues for breaking changes",
           "include_automations": "Include automations in analysis context",
           "include_addons": "Include add-ons in analysis context",
@@ -61,7 +62,8 @@
         "state_attributes": {
           "event_type": {
             "state": {
-              "report_generated": "Report generated"
+              "report_generated": "Report generated",
+              "post_upgrade_complete": "Post-upgrade verification complete"
             }
           }
         }

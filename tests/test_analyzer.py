@@ -8,7 +8,12 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.upgrade_advisor.analyzer import (
     async_analyze,
+    build_planning_prompt,
+    build_post_upgrade_prompt,
     build_single_pass_prompt,
+    build_summary_prompt,
+    format_check_pairs,
+    parse_post_upgrade_response,
     parse_response,
 )
 
@@ -71,6 +76,78 @@ def test_parse_response_case_insensitive() -> None:
     risk, count = parse_response(response)
     assert risk == "medium"
     assert count == 1
+
+
+def test_planning_prompt_targets_bug_shape() -> None:
+    """The planner is told to match the bug shape, not the feature keyword."""
+    prompt = build_planning_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        current_version="2026.4.2",
+        target_version="2026.4.3",
+        release_notes="Notes",
+        context={"integrations": "- foo", "devices": "- bar"},
+    )
+    assert "unaffected_shape" in prompt
+    assert "SPECIFIC MALFORMED SHAPE" in prompt
+    # The planner must be told NOT to match every feature keyword
+    assert "Matching a common keyword is noise" in prompt
+
+
+def test_summary_prompt_requires_quoted_lines_and_classification() -> None:
+    """The summary prompt forces quoted evidence and downgrade when no malformed line is found."""
+    prompt = build_summary_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        current_version="2026.4.2",
+        target_version="2026.4.3",
+        check_results="",
+    )
+    assert "GROUNDING RULE" in prompt
+    assert "likely affected" in prompt
+    assert "likely safe" in prompt
+    assert "no malformed occurrences detected" in prompt
+    assert "Do NOT invent or paraphrase match content" in prompt
+
+
+def test_build_post_upgrade_prompt_includes_pairs() -> None:
+    """Post-upgrade prompt embeds the pre/post check pairs and version info."""
+    pairs = format_check_pairs(
+        [
+            ("Z-Wave cover state", "breaking", "All covers OK", "2 covers unavailable", True, False),
+            ("ESPHome lights", "post_upgrade", "none", "0 lights", True, True),
+        ]
+    )
+    prompt = build_post_upgrade_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        from_version="2026.4.2",
+        target_version="2026.4.3",
+        check_pairs=pairs,
+    )
+
+    assert "2026.4.2 → 2026.4.3" in prompt
+    assert "Z-Wave cover state" in prompt
+    assert "BEFORE ✅" in prompt
+    assert "AFTER" in prompt
+    assert "❌" in prompt
+    assert "POST_STATUS" in prompt
+    assert "REGRESSIONS" in prompt
+
+
+def test_parse_post_upgrade_response_extracts_status_and_regressions() -> None:
+    """Post-upgrade parser returns status and count."""
+    text = "Everything fine.\n\nPOST_STATUS: degraded\nREGRESSIONS: 2"
+    status, regressions = parse_post_upgrade_response(text)
+    assert status == "degraded"
+    assert regressions == 2
+
+
+def test_parse_post_upgrade_response_defaults_when_missing() -> None:
+    """Missing markers produce unknown/0 without raising."""
+    status, regressions = parse_post_upgrade_response("nothing structured here")
+    assert status == "unknown"
+    assert regressions == 0
 
 
 async def test_async_analyze_success(hass: HomeAssistant, mock_converse) -> None:
