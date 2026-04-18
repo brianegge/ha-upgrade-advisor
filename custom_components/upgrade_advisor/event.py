@@ -30,7 +30,7 @@ class UpgradeAdvisorReportEvent(EventEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "report"
-    _attr_event_types: ClassVar[list[str]] = ["report_generated"]
+    _attr_event_types: ClassVar[list[str]] = ["report_generated", "post_upgrade_complete"]
 
     def __init__(self, coordinator: Any, entry: UpgradeAdvisorConfigEntry) -> None:
         """Initialize."""
@@ -46,4 +46,9 @@ class UpgradeAdvisorReportEvent(EventEntity):
     def fire_report_event(self, report_data: dict[str, Any]) -> None:
         """Fire the report event with analysis data."""
         self._trigger_event("report_generated", report_data)
+        self.async_write_ha_state()
+
+    def fire_post_upgrade_event(self, report_data: dict[str, Any]) -> None:
+        """Fire the post-upgrade event after a completed upgrade has been verified."""
+        self._trigger_event("post_upgrade_complete", report_data)
         self.async_write_ha_state()

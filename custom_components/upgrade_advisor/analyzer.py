@@ -31,6 +31,10 @@ CURRENT (pre-upgrade) state. Do NOT describe results as "verified post-upgrade" 
 ## Devices by Integration
 {devices}
 
+Each integration section shows "entities by domain" — use this to verify a \
+domain-specific feature applies. If the release note talks about covers but \
+the integration has no `cover` entities, skip it.
+
 ## HACS Components
 {hacs_components}
 
@@ -41,19 +45,43 @@ Do not create any check for it. Do not mention it. For example, if the release \
 notes mention Litter-Robot, Tuya, BMW, JVC Projector, or Roth Touchline but \
 none of those appear in the installed list above, do not create checks for them.
 
+Similarly, if a feature applies only to a specific entity domain (e.g. lights, \
+covers, climate), confirm the installed integration actually has entities in \
+that domain before creating a check. Check the "entities by domain" line above, \
+or use `entity_count` with both `integration` and `domain` set.
+
 ## Available Check Types
 
 1. `grep_config` — Search YAML config files and Lovelace dashboards for a pattern
-   Params: `pattern` (regex)
-   Use for: deprecated config keys, removed options, services that are being changed
+   Params: `pattern` (regex), optional `unaffected_shape` (regex)
+   Use for: deprecated config keys, removed options, services that are being changed.
+
+   CRITICAL: `pattern` must target the SPECIFIC MALFORMED SHAPE the fix is \
+   about — not the surrounding feature keyword. A fix for "device_class \
+   stripped on reload for template binary sensors" should NOT match every \
+   `device_class:` line. Instead it should match the shape that triggers \
+   the bug (e.g. `device_class:\\s*$` or `device_class:\\s*(null|none)\\b`). \
+   Matching a common keyword is noise; matching the bug shape is signal.
+
+   If you cannot narrow the regex to the bug shape, set `unaffected_shape` \
+   to a regex that matches a WELL-FORMED occurrence. Lines that also match \
+   `unaffected_shape` will be discarded as benign. For the example above, \
+   `unaffected_shape` could be `device_class:\\s*\\w+` (has a non-empty value). \
+   The goal: the reported count is "lines that may actually be hit by the \
+   bug", not "lines that use the feature."
 
 2. `automation_references` — Search automation YAML for a pattern
    Params: `pattern` (regex)
    Use for: finding automations using deprecated or newly enhanced services/entities
 
 3. `entity_count` — Count entities for an integration
-   Params: `integration` (domain name)
-   Use for: confirming an integration is actively used
+   Params: `integration` (integration domain, e.g. "esphome"), optional `domain`
+   (entity domain, e.g. "light", "cover", "sensor")
+   Use for: confirming an integration is actively used. For features that only
+   apply to a specific entity domain (light color temperature, cover state,
+   climate presets, etc.), ALWAYS pass `domain` to narrow the check — an
+   integration having many entities overall does not mean it has entities of
+   the relevant domain.
 
 4. `backup_recent` — Verify a recent backup exists
 
@@ -69,6 +97,8 @@ JSON array of check objects with these fields:
 - `severity`: "breaking", "warning", or "post_upgrade"
 - `context`: why this matters (include the PR number or link from release notes if available)
 - `pattern`: regex (for grep_config, automation_references, service_exists)
+- `unaffected_shape`: optional regex for grep_config — lines matching this are \
+  filtered out as benign
 - `integration`: domain name (for entity_count)
 - `if_found`: message if matches found
 - `if_not_found`: message if no matches
@@ -102,6 +132,24 @@ things like "currently working" or "X entities active pre-upgrade".
 ONLY report on checks that were actually performed. Do not mention integrations \
 that were not checked. OMIT any section that would be empty.
 
+GROUNDING RULE for grep_config hits — when a grep_config check reports \
+matches, you MUST:
+- Quote up to 3 of the matched lines VERBATIM (file:line: content) from the \
+  check detail. These are the concrete evidence.
+- For each quoted line, classify it as one of:
+  - **likely affected** — the line shape matches the bug described in the release notes
+  - **likely safe** — the line uses the feature but not the bug shape
+  - **unclear** — cannot tell without reviewing the surrounding YAML
+- If you cannot point at any line you'd label "likely affected," downgrade \
+  the check from breaking/warning to INFO and say so plainly: \
+  "Feature is in use; no malformed occurrences detected in {{N}} matches reviewed." \
+  Do NOT pad with vague warnings like "review these to ensure they are \
+  correctly formed" — that is noise, not advice.
+
+Do NOT invent or paraphrase match content. If the detail says `foo.yaml:42: \
+bar: baz`, quote it as `foo.yaml:42: bar: baz`. Do not summarize it as "a \
+reference to bar."
+
 Structure the report as follows:
 
 1. **What's New For You** — Lead with this section. List new features and \
@@ -111,11 +159,14 @@ Structure the report as follows:
    Only include features for integrations that had checks performed.
 
 2. **Breaking Changes** — Table of breaking change checks with status and \
-   evidence. Only include checks that were actually run. If all passed, \
-   summarize in one line: "All breaking change checks passed — safe to upgrade."
+   evidence. Only include checks that were actually run. For grep_config \
+   hits, include the quoted lines + classifications per the grounding rule \
+   above. If all passed, summarize in one line: "All breaking change checks \
+   passed — safe to upgrade."
 
 3. **Action Required** — Only if something ACTUALLY needs to be done \
-   before upgrading. Omit if all checks passed.
+   before upgrading. Must reference a specific "likely affected" line. \
+   Omit if nothing is concretely affected.
 
 4. **Risk Assessment** — ONLY if risk is Medium or High. Omit for Low risk.
 
@@ -124,6 +175,45 @@ Keep it short and factual.
 End your response with:
 RISK_LEVEL: <Low|Medium|High>
 BREAKING_CHANGES: <number of checks that FAILED>"""
+
+# Post-upgrade: re-run the same checks and describe the delta
+POST_UPGRADE_SUMMARY_PROMPT = """You are a Home Assistant upgrade advisor. The upgrade has \
+ALREADY BEEN APPLIED. Compare the pre-upgrade and post-upgrade check results \
+and describe what changed.
+
+## Upgrade (completed)
+{upgrade_type}: {component_name} {from_version} → {target_version}
+
+## Check Results (before → after)
+{check_pairs}
+
+## Instructions
+Classify each check pair:
+- OK — passed before, still passes now. Do not list individually; count them.
+- NEWLY FAILING — passed before, fails now. This is almost certainly caused \
+  by the upgrade. List these prominently.
+- STILL FAILING — failed before and after. Pre-existing; do NOT blame the upgrade.
+- IMPROVED — failed before, passes now. The upgrade or a migration fixed it.
+- OPPORTUNITY — post_upgrade severity checks that now show adoption or can \
+  be adopted.
+
+Report structure (OMIT any empty section):
+
+1. **Regressions caused by this upgrade** — only NEWLY FAILING checks. For \
+   each, include the check title, what changed, and a suggested next step.
+2. **Improvements** — only IMPROVED checks worth surfacing.
+3. **Opportunities now available** — for OPPORTUNITY checks, describe the new \
+   capability and how to adopt it.
+4. **Pre-existing issues unchanged** — a brief note if there are STILL FAILING \
+   checks; do NOT re-describe them in detail.
+5. **Summary** — one line: did the upgrade land cleanly?
+
+Keep it short and factual. Do not invent findings that aren't in the check data.
+
+End your response with:
+POST_STATUS: <clean|degraded|broken>
+REGRESSIONS: <number of NEWLY FAILING checks>"""
+
 
 # Legacy single-pass prompt (fallback)
 SINGLE_PASS_PROMPT = """You are a Home Assistant upgrade advisor. Analyze the following release notes \
@@ -186,6 +276,10 @@ class AnalysisResult:
     current_version: str = ""
     target_version: str = ""
     error: str | None = None
+    # Populated by the two-phase pipeline so the coordinator can persist the
+    # plan for a post-upgrade replay. Not serialized to the user-facing report.
+    check_tasks: list[Any] | None = None
+    check_results: list[Any] | None = None
 
 
 def build_planning_prompt(
@@ -265,6 +359,55 @@ def parse_response(response_text: str) -> tuple[str, int]:
         breaking_count = int(count_match.group(1))
 
     return risk_level, breaking_count
+
+
+def parse_post_upgrade_response(response_text: str) -> tuple[str, int]:
+    """Parse the post-upgrade AI response: POST_STATUS + REGRESSIONS count."""
+    status = "unknown"
+    regressions = 0
+
+    status_match = re.search(r"POST_STATUS:\s*(clean|degraded|broken)", response_text, re.IGNORECASE)
+    if status_match:
+        status = status_match.group(1).lower()
+
+    count_match = re.search(r"REGRESSIONS:\s*(\d+)", response_text)
+    if count_match:
+        regressions = int(count_match.group(1))
+
+    return status, regressions
+
+
+def format_check_pairs(pairs: list[tuple[str, str, str, str, bool, bool]]) -> str:
+    """Render pre/post check result pairs for the post-upgrade prompt.
+
+    Each pair is (title, severity, pre_detail, post_detail, pre_passed, post_passed).
+    """
+    lines: list[str] = []
+    for title, severity, pre_detail, post_detail, pre_passed, post_passed in pairs:
+        pre_icon = "✅" if pre_passed else "❌"
+        post_icon = "✅" if post_passed else "❌"
+        lines.append(f"**{title}** [{severity}]")
+        lines.append(f"  BEFORE {pre_icon}: {pre_detail}")
+        lines.append(f"  AFTER  {post_icon}: {post_detail}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def build_post_upgrade_prompt(
+    upgrade_type: str,
+    component_name: str,
+    from_version: str,
+    target_version: str,
+    check_pairs: str,
+) -> str:
+    """Build the post-upgrade summary prompt."""
+    return POST_UPGRADE_SUMMARY_PROMPT.format(
+        upgrade_type=upgrade_type,
+        component_name=component_name,
+        from_version=from_version,
+        target_version=target_version,
+        check_pairs=check_pairs,
+    )
 
 
 async def async_converse_with_agent(hass: HomeAssistant, agent_id: str, prompt: str) -> str:

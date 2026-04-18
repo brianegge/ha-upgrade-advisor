@@ -11,6 +11,7 @@ from custom_components.upgrade_advisor.summarize import (
     _get_model_name,
     async_get_automation_summaries,
     async_get_integration_list,
+    async_summarize_devices,
     build_installation_context,
 )
 
@@ -82,6 +83,51 @@ async def test_get_integration_list(hass: HomeAssistant) -> None:
     result = async_get_integration_list(hass)
     # With no entries, returns empty
     assert isinstance(result, str)
+
+
+async def test_summarize_devices_emits_integration_domain_totals(hass: HomeAssistant) -> None:
+    """Per-integration entity domain totals are included in the devices summary."""
+    from unittest.mock import patch
+
+    device = MagicMock()
+    device.id = "dev1"
+    device.manufacturer = "ESP"
+    device.model = "Widget"
+    device.name = "ESP Widget"
+    device.identifiers = {("esphome", "abc")}
+    device.config_entries = set()
+
+    def _entity(entity_id: str, platform: str, device_id: str | None):
+        e = MagicMock()
+        e.entity_id = entity_id
+        e.platform = platform
+        e.disabled = False
+        e.entity_category = None
+        e.device_id = device_id
+        e.domain = entity_id.split(".")[0]
+        return e
+
+    entities = [
+        _entity("sensor.temp", "esphome", "dev1"),
+        _entity("sensor.humidity", "esphome", "dev1"),
+        _entity("binary_sensor.motion", "esphome", "dev1"),
+    ]
+
+    device_reg = MagicMock()
+    device_reg.devices = MagicMock()
+    device_reg.devices.values.return_value = [device]
+    entity_reg = MagicMock()
+    entity_reg.entities = MagicMock()
+    entity_reg.entities.values.return_value = entities
+
+    with (
+        patch("custom_components.upgrade_advisor.summarize.dr.async_get", return_value=device_reg),
+        patch("custom_components.upgrade_advisor.summarize.er.async_get", return_value=entity_reg),
+    ):
+        result = async_summarize_devices(hass)
+
+    assert "### esphome" in result
+    assert "entities by domain: binary_sensor, sensor x2" in result
 
 
 async def test_build_installation_context(hass: HomeAssistant) -> None:

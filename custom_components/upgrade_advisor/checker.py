@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from homeassistant.core import HomeAssistant
@@ -37,10 +37,38 @@ class CheckTask:
     if_not_found: str = ""
     # Check-specific params
     pattern: str = ""
+    # Optional second regex applied to each line that already matched `pattern`.
+    # Lines that match `unaffected_shape` are dropped from the result — they
+    # represent the feature being used correctly, not the bug shape the fix
+    # is about. Use this to separate "uses the feature" from "hit by the bug."
+    unaffected_shape: str = ""
     files: str = "*.yaml"
     integration: str = ""
+    domain: str = ""
     entity_id: str = ""
     component: str = ""
+
+
+def check_task_to_dict(task: CheckTask) -> dict:
+    """Serialize a CheckTask for persistent storage."""
+    return asdict(task)
+
+
+def check_task_from_dict(data: dict) -> CheckTask:
+    """Rebuild a CheckTask from persisted state, ignoring unknown fields."""
+    valid = {f.name for f in fields(CheckTask)}
+    return CheckTask(**{k: v for k, v in data.items() if k in valid})
+
+
+def check_result_to_dict(result: CheckResult) -> dict:
+    """Serialize a CheckResult for persistent storage."""
+    return asdict(result)
+
+
+def check_result_from_dict(data: dict) -> CheckResult:
+    """Rebuild a CheckResult from persisted state, ignoring unknown fields."""
+    valid = {f.name for f in fields(CheckResult)}
+    return CheckResult(**{k: v for k, v in data.items() if k in valid})
 
 
 def parse_check_tasks(raw_json: str) -> list[CheckTask]:
@@ -70,8 +98,10 @@ def parse_check_tasks(raw_json: str) -> list[CheckTask]:
                 if_found=item.get("if_found", ""),
                 if_not_found=item.get("if_not_found", ""),
                 pattern=item.get("pattern", ""),
+                unaffected_shape=item.get("unaffected_shape", ""),
                 files=item.get("files", "*.yaml"),
                 integration=item.get("integration", ""),
+                domain=item.get("domain", ""),
                 entity_id=item.get("entity_id", ""),
                 component=item.get("component", ""),
             )
@@ -139,7 +169,14 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
         )
 
     regex = re.compile(pattern, re.IGNORECASE)
+    disqualifier: re.Pattern[str] | None = None
+    if task.unaffected_shape:
+        try:
+            disqualifier = re.compile(task.unaffected_shape, re.IGNORECASE)
+        except re.error:
+            _LOGGER.warning("Invalid unaffected_shape regex for '%s': %s", task.title, task.unaffected_shape)
     matches: list[str] = []
+    disqualified = 0
 
     # Search YAML config files
     search_files: list[Path] = list(config_dir.glob("*.yaml"))
@@ -169,11 +206,19 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
             content = await hass.async_add_executor_job(search_file.read_text)
             files_searched += 1
             for line_num, line in enumerate(content.split("\n"), 1):
-                if regex.search(line):
-                    relative = search_file.relative_to(config_dir)
-                    matches.append(f"{relative}:{line_num}: {line.strip()}")
+                if not regex.search(line):
+                    continue
+                if disqualifier is not None and disqualifier.search(line):
+                    disqualified += 1
+                    continue
+                relative = search_file.relative_to(config_dir)
+                matches.append(f"{relative}:{line_num}: {line.strip()}")
         except Exception:
             continue
+
+    disqualified_note = (
+        f" ({disqualified} well-formed occurrence(s) filtered out by unaffected_shape)" if disqualified else ""
+    )
 
     if matches:
         match_text = "\n".join(f"  - {m}" for m in matches[:10])
@@ -183,8 +228,8 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
             title=task.title,
             passed=False,
             detail=(
-                f"Found '{pattern}' in {len(matches)} location(s) "
-                f"across {files_searched} files:\n{match_text}{extra}"
+                f"Found '{pattern}' in {len(matches)} bug-shaped location(s) "
+                f"across {files_searched} files{disqualified_note}:\n{match_text}{extra}"
                 f"\n\n{task.if_found}"
             ),
             severity=task.severity,
@@ -194,13 +239,20 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
         check_id="grep_config",
         title=task.title,
         passed=True,
-        detail=f"Searched {files_searched} YAML files — no matches for '{pattern}'.\n\n{task.if_not_found}",
+        detail=(
+            f"Searched {files_searched} YAML files — no bug-shaped matches for "
+            f"'{pattern}'{disqualified_note}.\n\n{task.if_not_found}"
+        ),
         severity=task.severity,
     )
 
 
 def _get_entity_ids_for_integration(
-    hass: HomeAssistant, integration: str, *, exclude_diagnostic: bool = False
+    hass: HomeAssistant,
+    integration: str,
+    *,
+    exclude_diagnostic: bool = False,
+    domain: str = "",
 ) -> list[str]:
     """Get all entity IDs belonging to an integration using the entity registry."""
     ent_reg = er.async_get(hass)
@@ -208,6 +260,8 @@ def _get_entity_ids_for_integration(
     for entity in ent_reg.entities.values():
         if entity.platform == integration and not entity.disabled:
             if exclude_diagnostic and entity.entity_category is not None:
+                continue
+            if domain and entity.domain != domain:
                 continue
             entity_ids.append(entity.entity_id)
     return entity_ids
@@ -470,16 +524,17 @@ async def _check_entity_count(hass: HomeAssistant, task: CheckTask) -> CheckResu
             severity=task.severity,
         )
 
-    entity_ids = _get_entity_ids_for_integration(hass, integration)
+    entity_ids = _get_entity_ids_for_integration(hass, integration, domain=task.domain)
     count = len(entity_ids)
+    scope = f"'{integration}' {task.domain} entities" if task.domain else f"'{integration}'"
 
-    # Include a sample of entity IDs for context
     if count > 0:
-        sample = ", ".join(entity_ids[:5])
-        extra = f" and {count - 5} more" if count > 5 else ""
-        detail = f"Found {count} entities for '{integration}': {sample}{extra}"
+        sample_size = 10 if task.domain else 5
+        sample = ", ".join(entity_ids[:sample_size])
+        extra = f" and {count - sample_size} more" if count > sample_size else ""
+        detail = f"Found {count} {scope}: {sample}{extra}"
     else:
-        detail = f"No entities found for '{integration}'"
+        detail = f"No {scope} found"
 
     return CheckResult(
         check_id="entity_count",

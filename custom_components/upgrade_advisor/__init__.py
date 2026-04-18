@@ -19,23 +19,37 @@ from .analyzer import (
     async_analyze,
     async_converse_with_agent,
     build_planning_prompt,
+    build_post_upgrade_prompt,
     build_single_pass_prompt,
     build_summary_prompt,
+    format_check_pairs,
+    parse_post_upgrade_response,
     parse_response,
 )
-from .checker import async_run_checks, format_check_results, parse_check_tasks
+from .checker import (
+    CheckResult,
+    async_run_checks,
+    check_result_from_dict,
+    check_result_to_dict,
+    check_task_from_dict,
+    check_task_to_dict,
+    format_check_results,
+    parse_check_tasks,
+)
 from .const import (
     CONF_AGENT_ID,
     CONF_CREATE_REPAIRS,
     CONF_DASHBOARD_PATH,
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
+    CONF_POST_UPGRADE_CHECK,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
     DEFAULT_CREATE_REPAIRS,
     DEFAULT_DASHBOARD_PATH,
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
+    DEFAULT_POST_UPGRADE_CHECK,
     DEFAULT_SCAN_HACS,
     DEFAULT_SCAN_ON_UPDATE,
     DOMAIN,
@@ -44,6 +58,7 @@ from .const import (
     STARTUP_DELAY_SECONDS,
 )
 from .github import async_get_ha_release_notes_range, async_get_hacs_release_notes
+from .pending_store import PendingAnalysis, PendingStore
 from .services import async_register_services, async_unregister_services
 from .summarize import build_installation_context
 
@@ -70,6 +85,13 @@ class UpgradeAdvisorCoordinator:
 
         # All reports from the current scan (keyed by component name)
         self.reports: dict[str, AnalysisResult] = {}
+
+        # Post-upgrade verification state
+        self.post_upgrade_report: str | None = None
+        self.post_upgrade_status: str = "unknown"
+        self.post_upgrade_regressions: int = 0
+        self.last_post_upgrade_check: str | None = None
+        self.pending_store: PendingStore = PendingStore(hass)
 
     @callback
     def async_add_listener(self, listener: Any) -> Any:
@@ -110,6 +132,7 @@ class UpgradeAdvisorCoordinator:
             current_version=current,
             target_version=target,
             repo=None,
+            entity_id=HA_CORE_UPDATE_ENTITY,
         )
 
     async def async_analyze_available_update(self) -> None:
@@ -129,6 +152,7 @@ class UpgradeAdvisorCoordinator:
                     current_version=current,
                     target_version=target,
                     repo=None,
+                    entity_id=HA_CORE_UPDATE_ENTITY,
                 )
                 analyzed = True
 
@@ -158,6 +182,7 @@ class UpgradeAdvisorCoordinator:
             current_version=current,
             target_version=version,
             repo=None,
+            entity_id=None,
         )
 
     async def async_analyze_hacs_update(self, entity_id: str) -> None:
@@ -183,6 +208,7 @@ class UpgradeAdvisorCoordinator:
             current_version=current,
             target_version=target,
             repo=repo,
+            entity_id=entity_id,
         )
 
     async def _run_two_phase_analysis(
@@ -273,6 +299,8 @@ class UpgradeAdvisorCoordinator:
                 component_name=component_name,
                 current_version=current_version,
                 target_version=target_version,
+                check_tasks=list(tasks),
+                check_results=list(check_results),
             )
 
         risk_level, breaking_count = parse_response(summary_response)
@@ -285,6 +313,8 @@ class UpgradeAdvisorCoordinator:
             component_name=component_name,
             current_version=current_version,
             target_version=target_version,
+            check_tasks=list(tasks),
+            check_results=list(check_results),
         )
 
     async def _fallback_single_pass(
@@ -325,6 +355,7 @@ class UpgradeAdvisorCoordinator:
         current_version: str,
         target_version: str,
         repo: str | None,
+        entity_id: str | None = None,
     ) -> None:
         """Run the full analysis pipeline."""
         self.status = "analyzing"
@@ -376,8 +407,36 @@ class UpgradeAdvisorCoordinator:
         else:
             self.status = "report_ready"
             await self._async_output_results(result)
+            await self._async_persist_pending(result, entity_id)
 
         self._async_notify_listeners()
+
+    async def _async_persist_pending(self, result: AnalysisResult, entity_id: str | None) -> None:
+        """Save the pre-upgrade plan so we can re-run it after the upgrade lands."""
+        if not self._get_option(CONF_POST_UPGRADE_CHECK, DEFAULT_POST_UPGRADE_CHECK):
+            return
+        if entity_id is None:
+            # user-specified version (async_analyze_version) — no entity to watch
+            return
+        if not result.check_tasks or not result.check_results:
+            # single-pass fallback or no checks ran
+            return
+        if not result.target_version or result.target_version == result.current_version:
+            return
+
+        entry = self.pending_store.make_entry(
+            upgrade_type=result.upgrade_type,
+            component_name=result.component_name,
+            entity_id=entity_id,
+            from_version=result.current_version,
+            target_version=result.target_version,
+            check_tasks=[check_task_to_dict(t) for t in result.check_tasks],
+            pre_results=[check_result_to_dict(r) for r in result.check_results],
+        )
+        try:
+            await self.pending_store.async_upsert(entry)
+        except Exception:
+            _LOGGER.exception("Failed to persist pending pre-upgrade plan")
 
     def _store_result(self, result: AnalysisResult) -> None:
         """Store analysis results on the coordinator."""
@@ -477,6 +536,137 @@ class UpgradeAdvisorCoordinator:
         title = f"Upgrade Advisor: {result.component_name} analysis failed"
         message = f"**Error:** {result.error}"
         async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}_error")
+
+    async def async_run_post_upgrade_checks(self) -> None:
+        """Re-run pending check plans whose target matches the installed version."""
+        if not self._get_option(CONF_POST_UPGRADE_CHECK, DEFAULT_POST_UPGRADE_CHECK):
+            return
+
+        try:
+            await self.pending_store.async_prune_stale()
+            entries = await self.pending_store.async_load()
+        except Exception:
+            _LOGGER.exception("Failed to load pending post-upgrade store")
+            return
+
+        for entry in entries:
+            state = self.hass.states.get(entry.entity_id)
+            if state is None:
+                continue
+            installed = state.attributes.get("installed_version", "")
+            if not installed:
+                continue
+            if installed != entry.target_version:
+                # either the upgrade hasn't happened yet or it was superseded
+                continue
+            try:
+                await self._run_single_post_upgrade(entry)
+            except Exception:
+                _LOGGER.exception("Post-upgrade check failed for %s", entry.component_name)
+            finally:
+                try:
+                    await self.pending_store.async_remove(entry.entity_id, entry.target_version)
+                except Exception:
+                    _LOGGER.exception("Failed to clear pending entry for %s", entry.component_name)
+
+    async def _run_single_post_upgrade(self, entry: PendingAnalysis) -> None:
+        """Replay a single pending plan and emit the post-upgrade report."""
+        _LOGGER.info(
+            "Running post-upgrade checks for %s %s → %s",
+            entry.component_name,
+            entry.from_version,
+            entry.target_version,
+        )
+        tasks = [check_task_from_dict(t) for t in entry.check_tasks]
+        if not tasks:
+            return
+
+        post_results: list[CheckResult] = await async_run_checks(self.hass, tasks)
+
+        pre_results = [check_result_from_dict(r) for r in entry.pre_results]
+        pre_by_title = {r.title: r for r in pre_results}
+
+        pairs: list[tuple[str, str, str, str, bool, bool]] = []
+        for post in post_results:
+            pre = pre_by_title.get(post.title)
+            if pre is None:
+                pairs.append(
+                    (
+                        post.title,
+                        post.severity,
+                        "(not recorded pre-upgrade)",
+                        post.detail,
+                        True,
+                        post.passed,
+                    )
+                )
+            else:
+                pairs.append(
+                    (
+                        post.title,
+                        post.severity,
+                        pre.detail,
+                        post.detail,
+                        pre.passed,
+                        post.passed,
+                    )
+                )
+
+        pairs_text = format_check_pairs(pairs)
+        prompt = build_post_upgrade_prompt(
+            upgrade_type=entry.upgrade_type,
+            component_name=entry.component_name,
+            from_version=entry.from_version,
+            target_version=entry.target_version,
+            check_pairs=pairs_text,
+        )
+
+        agent_id = self.entry.data[CONF_AGENT_ID]
+        try:
+            response_text = await async_converse_with_agent(self.hass, agent_id, prompt)
+        except Exception:
+            _LOGGER.exception("Post-upgrade LLM summary failed; falling back to raw pairs")
+            response_text = (
+                f"# Post-upgrade results for {entry.component_name} "
+                f"{entry.from_version} → {entry.target_version}\n\n"
+                f"{pairs_text}"
+            )
+            status, regressions = (
+                "unknown",
+                sum(1 for p in post_results if not p.passed and pre_by_title.get(p.title, p).passed),
+            )
+        else:
+            status, regressions = parse_post_upgrade_response(response_text)
+
+        self.post_upgrade_report = response_text
+        self.post_upgrade_status = status
+        self.post_upgrade_regressions = regressions
+        self.last_post_upgrade_check = datetime.now(tz=UTC).isoformat()
+
+        event_entity = self.hass.data[DOMAIN].get(self.entry.entry_id, {}).get("event_entity")
+        if event_entity is not None:
+            event_entity.fire_post_upgrade_event(
+                {
+                    "upgrade_type": entry.upgrade_type,
+                    "component_name": entry.component_name,
+                    "from_version": entry.from_version,
+                    "target_version": entry.target_version,
+                    "status": status,
+                    "regressions": regressions,
+                    "report": response_text,
+                }
+            )
+
+        # Surface as a persistent notification too so the user sees it
+        safe_name = entry.component_name.lower().replace(" ", "_")[:30]
+        title = f"Upgrade Advisor: {entry.component_name} post-upgrade ({entry.target_version})"
+        if regressions > 0:
+            message = f"**Status: {status.upper()}** | **Regressions: {regressions}**"
+        else:
+            message = f"**Status: {status.upper()}** | No regressions detected."
+        async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}_post")
+
+        self._async_notify_listeners()
 
     def _get_hacs_component_list(self) -> str:
         """Get a list of installed HACS components from update entities."""
@@ -611,7 +801,15 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
     async def _run_startup_scan(_now: Any = None) -> None:
         """Run a single sequential scan of all pending updates."""
         nonlocal startup_complete
-        await coordinator.async_analyze_available_update()
+        # Post-upgrade first: an upgrade may have just landed, so we want to
+        # verify it before we treat any new "on" update entities as fresh work.
+        if entry.options.get(CONF_POST_UPGRADE_CHECK, DEFAULT_POST_UPGRADE_CHECK):
+            try:
+                await coordinator.async_run_post_upgrade_checks()
+            except Exception:
+                _LOGGER.exception("Post-upgrade scan raised")
+        if entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE):
+            await coordinator.async_analyze_available_update()
         startup_complete = True
 
     @callback
@@ -619,7 +817,8 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
         """Schedule the startup scan after a delay for entities to become available."""
         nonlocal startup_complete
         scan_on_update = entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
-        if not scan_on_update:
+        post_upgrade = entry.options.get(CONF_POST_UPGRADE_CHECK, DEFAULT_POST_UPGRADE_CHECK)
+        if not scan_on_update and not post_upgrade:
             startup_complete = True
             return
         _LOGGER.debug(
