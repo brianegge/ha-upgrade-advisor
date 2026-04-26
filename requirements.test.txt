@@ -3,4 +3,4 @@ pytest-asyncio>=0.23
 pytest-cov>=4.0
 pytest-homeassistant-custom-component>=0.13.170
 hassil>=2.0
-home-assistant-intents>=2024.1
+home-assistant-intents>=2026.3.24
