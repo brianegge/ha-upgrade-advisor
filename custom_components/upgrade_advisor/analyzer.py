@@ -89,6 +89,14 @@ or use `entity_count` with both `integration` and `domain` set.
    Params: `pattern` (e.g. "light.turn_on")
    Use for: verifying services that may be renamed or removed
 
+6. `ha_version` — Verify Home Assistant Core version meets minimum requirement
+   Params: `pattern` (semantic version string, e.g. "2026.6.0")
+   Use for: breaking changes that only apply when upgrading from older Core
+   versions. This check AUTOMATICALLY verifies the current version — it does
+   NOT require manual confirmation. If the upgrade requires a specific minimum
+   Core version (e.g. "upgrade component X only when on Core 2026.6.0+"),
+   use this check instead of entity_count
+
 ## Output
 
 JSON array of check objects with these fields:
@@ -105,7 +113,9 @@ JSON array of check objects with these fields:
 
 Create checks in this order:
 1. `backup_recent`
-2. Breaking changes — ONLY for integrations in the installed list
+2. Breaking changes — ONLY for integrations in the installed list. If a breaking \
+   change depends on Core version (e.g. "only when upgrading from Core < 2026.6"), \
+   use `ha_version` with the minimum version, NOT entity_count.
 3. New features / opportunities — for each new feature relevant to an INSTALLED \
    integration, check for existing usage. Use severity "post_upgrade". Include \
    the PR link or release note reference in `context`. Set `if_found` to describe \
