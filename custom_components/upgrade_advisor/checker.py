@@ -140,6 +140,7 @@ async def _run_single_check(hass: HomeAssistant, task: CheckTask) -> CheckResult
         "backup_recent": _check_backup_recent,
         "service_exists": _check_service_exists,
         "entity_count": _check_entity_count,
+        "ha_version": _check_ha_version,
     }
 
     handler = dispatch.get(task.check)
@@ -541,6 +542,63 @@ async def _check_entity_count(hass: HomeAssistant, task: CheckTask) -> CheckResu
         title=task.title,
         passed=True,
         detail=f"{detail}\n\n{task.if_found if count > 0 else task.if_not_found}",
+        severity=task.severity,
+    )
+
+
+async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult:
+    """Check if HA Core version meets minimum requirement."""
+    from packaging import version
+
+    pattern = task.pattern
+    if not pattern:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=True,
+            detail="No minimum version specified",
+            severity=task.severity,
+        )
+
+    try:
+        required_version = version.parse(pattern)
+    except Exception:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=False,
+            detail=f"Invalid version format: {pattern}",
+            severity=task.severity,
+        )
+
+    from homeassistant import core as ha_core
+
+    current = ha_core.__version__
+    try:
+        current_version = version.parse(current)
+    except Exception:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=False,
+            detail=f"Could not parse current HA version: {current}",
+            severity=task.severity,
+        )
+
+    if current_version >= required_version:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=True,
+            detail=f"Current HA Core version {current} meets requirement ≥ {pattern}",
+            severity=task.severity,
+        )
+
+    return CheckResult(
+        check_id="ha_version",
+        title=task.title,
+        passed=False,
+        detail=f"Current HA Core version {current} is below required {pattern}. Upgrade Core first.",
         severity=task.severity,
     )
 
