@@ -102,14 +102,5 @@
     "github_fetch_failed": {
       "message": "Failed to fetch release notes from GitHub: {error}"
     }
-  },
-  "checks": {
-    "ha_version": {
-      "no_pattern": "No minimum version specified",
-      "invalid_format": "Invalid version format: {pattern}",
-      "parse_error": "Could not parse current HA version: {current}",
-      "met": "Current HA Core version {current} meets requirement ≥ {pattern}",
-      "not_met": "Current HA Core version {current} is below required {pattern}. Upgrade Core first."
-    }
   }
 }
