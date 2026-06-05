@@ -13,6 +13,17 @@ from homeassistant.helpers import entity_registry as er
 
 _LOGGER = logging.getLogger(__name__)
 
+# Check result message strings (see strings.json for i18n reference)
+_CHECK_MESSAGES = {
+    "ha_version": {
+        "no_pattern": "No minimum version specified",
+        "invalid_format": "Invalid version format: {pattern}",
+        "parse_error": "Could not parse current HA version: {current}",
+        "met": "Current HA Core version {current} meets requirement ≥ {pattern}",
+        "not_met": "Current HA Core version {current} is below required {pattern}. Upgrade Core first.",
+    }
+}
+
 
 @dataclass
 class CheckResult:
@@ -556,7 +567,7 @@ async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult
             check_id="ha_version",
             title=task.title,
             passed=True,
-            detail="No minimum version specified",
+            detail=_CHECK_MESSAGES["ha_version"]["no_pattern"],
             severity=task.severity,
         )
 
@@ -567,7 +578,7 @@ async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult
             check_id="ha_version",
             title=task.title,
             passed=False,
-            detail=f"Invalid version format: {pattern}",
+            detail=_CHECK_MESSAGES["ha_version"]["invalid_format"].format(pattern=pattern),
             severity=task.severity,
         )
 
@@ -581,7 +592,7 @@ async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult
             check_id="ha_version",
             title=task.title,
             passed=False,
-            detail=f"Could not parse current HA version: {current}",
+            detail=_CHECK_MESSAGES["ha_version"]["parse_error"].format(current=current),
             severity=task.severity,
         )
 
@@ -590,7 +601,7 @@ async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult
             check_id="ha_version",
             title=task.title,
             passed=True,
-            detail=f"Current HA Core version {current} meets requirement ≥ {pattern}",
+            detail=_CHECK_MESSAGES["ha_version"]["met"].format(current=current, pattern=pattern),
             severity=task.severity,
         )
 
@@ -598,7 +609,7 @@ async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult
         check_id="ha_version",
         title=task.title,
         passed=False,
-        detail=f"Current HA Core version {current} is below required {pattern}. Upgrade Core first.",
+        detail=_CHECK_MESSAGES["ha_version"]["not_met"].format(current=current, pattern=pattern),
         severity=task.severity,
     )
 
