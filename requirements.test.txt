@@ -1,6 +1,6 @@
 pytest>=7.4.4,<9.0
 pytest-asyncio>=1.4.0
 pytest-cov>=4.0
-pytest-homeassistant-custom-component>=0.13,<0.13.206
+pytest-homeassistant-custom-component>=0.13.336,<0.13.337
 hassil>=2.0
 home-assistant-intents>=2026.5.5
