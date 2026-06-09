@@ -13,6 +13,17 @@ from homeassistant.helpers import entity_registry as er
 
 _LOGGER = logging.getLogger(__name__)
 
+# Check result message strings (see strings.json for i18n reference)
+_CHECK_MESSAGES = {
+    "ha_version": {
+        "no_pattern": "No minimum version specified",
+        "invalid_format": "Invalid version format: {pattern}",
+        "parse_error": "Could not parse current HA version: {current}",
+        "met": "Current HA Core version {current} meets requirement ≥ {pattern}",
+        "not_met": "Current HA Core version {current} is below required {pattern}. Upgrade Core first.",
+    }
+}
+
 
 @dataclass
 class CheckResult:
@@ -140,6 +151,7 @@ async def _run_single_check(hass: HomeAssistant, task: CheckTask) -> CheckResult
         "backup_recent": _check_backup_recent,
         "service_exists": _check_service_exists,
         "entity_count": _check_entity_count,
+        "ha_version": _check_ha_version,
     }
 
     handler = dispatch.get(task.check)
@@ -541,6 +553,63 @@ async def _check_entity_count(hass: HomeAssistant, task: CheckTask) -> CheckResu
         title=task.title,
         passed=True,
         detail=f"{detail}\n\n{task.if_found if count > 0 else task.if_not_found}",
+        severity=task.severity,
+    )
+
+
+async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult:
+    """Check if HA Core version meets minimum requirement."""
+    from packaging import version
+
+    pattern = task.pattern
+    if not pattern:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=True,
+            detail=_CHECK_MESSAGES["ha_version"]["no_pattern"],
+            severity=task.severity,
+        )
+
+    try:
+        required_version = version.parse(pattern)
+    except Exception:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=False,
+            detail=_CHECK_MESSAGES["ha_version"]["invalid_format"].format(pattern=pattern),
+            severity=task.severity,
+        )
+
+    from homeassistant import core as ha_core
+
+    current = ha_core.__version__
+    try:
+        current_version = version.parse(current)
+    except Exception:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=False,
+            detail=_CHECK_MESSAGES["ha_version"]["parse_error"].format(current=current),
+            severity=task.severity,
+        )
+
+    if current_version >= required_version:
+        return CheckResult(
+            check_id="ha_version",
+            title=task.title,
+            passed=True,
+            detail=_CHECK_MESSAGES["ha_version"]["met"].format(current=current, pattern=pattern),
+            severity=task.severity,
+        )
+
+    return CheckResult(
+        check_id="ha_version",
+        title=task.title,
+        passed=False,
+        detail=_CHECK_MESSAGES["ha_version"]["not_met"].format(current=current, pattern=pattern),
         severity=task.severity,
     )
 
