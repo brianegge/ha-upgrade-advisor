@@ -13,6 +13,7 @@ from custom_components.upgrade_advisor.checker import (
     _check_entity_available,
     _check_entity_count,
     _check_grep_config,
+    _check_ha_version,
     _check_unavailable_entities,
     _count_diagnostic_unavailable,
     _get_entity_ids_for_integration,
@@ -411,3 +412,43 @@ async def test_check_unavailable_entities_global(hass: HomeAssistant) -> None:
     # Global check should exclude diagnostic entities
     assert "sensor.temp" in result.detail
     assert "sensor.diag" not in result.detail
+
+
+async def test_check_ha_version_meets_requirement(hass: HomeAssistant) -> None:
+    """Test ha_version check when current version meets requirement."""
+    task = CheckTask(check="ha_version", title="Core version check", pattern="2026.1.0")
+    with patch("homeassistant.core.__version__", "2026.6.0"):
+        result = await _check_ha_version(hass, task)
+
+    assert result.passed is True
+    assert "2026.6.0" in result.detail
+    assert "meets requirement" in result.detail
+
+
+async def test_check_ha_version_below_requirement(hass: HomeAssistant) -> None:
+    """Test ha_version check when current version is below requirement."""
+    task = CheckTask(check="ha_version", title="Core version check", pattern="2026.6.0")
+    with patch("homeassistant.core.__version__", "2026.1.0"):
+        result = await _check_ha_version(hass, task)
+
+    assert result.passed is False
+    assert "2026.1.0" in result.detail
+    assert "below required" in result.detail
+
+
+async def test_check_ha_version_invalid_pattern(hass: HomeAssistant) -> None:
+    """Test ha_version check with invalid version pattern."""
+    task = CheckTask(check="ha_version", title="Core version check", pattern="invalid_version")
+    result = await _check_ha_version(hass, task)
+
+    assert result.passed is False
+    assert "Invalid version format" in result.detail
+
+
+async def test_check_ha_version_no_pattern(hass: HomeAssistant) -> None:
+    """Test ha_version check with no pattern specified."""
+    task = CheckTask(check="ha_version", title="Core version check", pattern="")
+    result = await _check_ha_version(hass, task)
+
+    assert result.passed is True
+    assert "No minimum version specified" in result.detail
