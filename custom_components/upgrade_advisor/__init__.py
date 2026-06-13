@@ -534,7 +534,13 @@ class UpgradeAdvisorCoordinator:
         """Create a notification when analysis fails."""
         safe_name = result.component_name.lower().replace(" ", "_")[:30]
         title = f"Upgrade Advisor: {result.component_name} analysis failed"
-        message = f"**Error:** {result.error}"
+        error_text = result.error or "Unknown error"
+        if "402" in error_text or "credits" in error_text.lower():
+            message = "**Error:** AI service out of credits. Add credits at https://openrouter.ai/settings/credits"
+        elif "talking to api" in error_text.lower():
+            message = f"**Error:** AI service unavailable — check your OpenRouter API key and credits. ({error_text})"
+        else:
+            message = f"**Error:** {error_text}"
         async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}_error")
 
     async def async_run_post_upgrade_checks(self) -> None:

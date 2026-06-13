@@ -13,17 +13,6 @@ from homeassistant.helpers import entity_registry as er
 
 _LOGGER = logging.getLogger(__name__)
 
-# Check result message strings (see strings.json for i18n reference)
-_CHECK_MESSAGES = {
-    "ha_version": {
-        "no_pattern": "No minimum version specified",
-        "invalid_format": "Invalid version format: {pattern}",
-        "parse_error": "Could not parse current HA version: {current}",
-        "met": "Current HA Core version {current} meets requirement ≥ {pattern}",
-        "not_met": "Current HA Core version {current} is below required {pattern}. Upgrade Core first.",
-    }
-}
-
 
 @dataclass
 class CheckResult:
@@ -151,7 +140,6 @@ async def _run_single_check(hass: HomeAssistant, task: CheckTask) -> CheckResult
         "backup_recent": _check_backup_recent,
         "service_exists": _check_service_exists,
         "entity_count": _check_entity_count,
-        "ha_version": _check_ha_version,
     }
 
     handler = dispatch.get(task.check)
@@ -165,6 +153,62 @@ async def _run_single_check(hass: HomeAssistant, task: CheckTask) -> CheckResult
         )
 
     return await handler(hass, task)
+
+
+_MAX_FILE_SIZE_BYTES = 2_000_000
+
+
+def _grep_files_sync(
+    config_dir: Path,
+    glob_patterns: list[str],
+    extra_glob_roots: list[tuple[str, str]],
+    regex: re.Pattern[str],
+    disqualifier: re.Pattern[str] | None,
+) -> tuple[list[str], int, int]:
+    """Walk the config tree and grep matching lines. Runs in an executor.
+
+    extra_glob_roots is a list of (subdir, pattern) tuples — the subdir is
+    probed via is_dir() and only globbed if present. Returns
+    (matches, disqualified_count, files_searched).
+    """
+    search_files: list[Path] = []
+    for pattern in glob_patterns:
+        search_files.extend(config_dir.glob(pattern))
+    for subdir, pattern in extra_glob_roots:
+        root = config_dir / subdir
+        if root.is_dir():
+            search_files.extend(root.glob(pattern))
+
+    seen: set[Path] = set()
+    unique_files: list[Path] = []
+    for f in search_files:
+        if f not in seen:
+            seen.add(f)
+            unique_files.append(f)
+
+    matches: list[str] = []
+    disqualified = 0
+    files_searched = 0
+    for search_file in unique_files:
+        try:
+            if search_file.stat().st_size > _MAX_FILE_SIZE_BYTES:
+                continue
+            content = search_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        files_searched += 1
+        try:
+            relative = search_file.relative_to(config_dir)
+        except ValueError:
+            relative = search_file
+        for line_num, line in enumerate(content.split("\n"), 1):
+            if not regex.search(line):
+                continue
+            if disqualifier is not None and disqualifier.search(line):
+                disqualified += 1
+                continue
+            matches.append(f"{relative}:{line_num}: {line.strip()}")
+    return matches, disqualified, files_searched
 
 
 async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResult:
@@ -187,46 +231,15 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
             disqualifier = re.compile(task.unaffected_shape, re.IGNORECASE)
         except re.error:
             _LOGGER.warning("Invalid unaffected_shape regex for '%s': %s", task.title, task.unaffected_shape)
-    matches: list[str] = []
-    disqualified = 0
 
-    # Search YAML config files
-    search_files: list[Path] = list(config_dir.glob("*.yaml"))
-    search_files.extend(config_dir.glob("packages/**/*.yaml"))
-    search_files.extend(config_dir.glob("integrations/**/*.yaml"))
-    search_files.extend(config_dir.glob("mqtt/**/*.yaml"))
-
-    # Also search Lovelace dashboard storage (JSON) for UI-configured settings
-    storage_dir = config_dir / ".storage"
-    if storage_dir.is_dir():
-        search_files.extend(storage_dir.glob("lovelace.*"))
-
-    # Deduplicate
-    seen: set[Path] = set()
-    unique_files: list[Path] = []
-    for f in search_files:
-        if f not in seen:
-            seen.add(f)
-            unique_files.append(f)
-
-    files_searched = 0
-    for search_file in unique_files:
-        # Skip huge files (>2MB)
-        if search_file.stat().st_size > 2_000_000:
-            continue
-        try:
-            content = await hass.async_add_executor_job(search_file.read_text)
-            files_searched += 1
-            for line_num, line in enumerate(content.split("\n"), 1):
-                if not regex.search(line):
-                    continue
-                if disqualifier is not None and disqualifier.search(line):
-                    disqualified += 1
-                    continue
-                relative = search_file.relative_to(config_dir)
-                matches.append(f"{relative}:{line_num}: {line.strip()}")
-        except Exception:
-            continue
+    matches, disqualified, files_searched = await hass.async_add_executor_job(
+        _grep_files_sync,
+        config_dir,
+        ["*.yaml", "packages/**/*.yaml", "integrations/**/*.yaml", "mqtt/**/*.yaml"],
+        [(".storage", "lovelace.*")],
+        regex,
+        disqualifier,
+    )
 
     disqualified_note = (
         f" ({disqualified} well-formed occurrence(s) filtered out by unaffected_shape)" if disqualified else ""
@@ -359,25 +372,18 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
             severity=task.severity,
         )
 
-    # Search automation YAML files
+    # Search automation YAML files — offloaded to executor for filesystem I/O
     config_dir = Path(hass.config.path())
     regex = re.compile(pattern, re.IGNORECASE)
-    matches: list[str] = []
 
-    # Check automations.yaml and any automation includes
-    auto_files = list(config_dir.glob("automations.yaml"))
-    auto_files.extend(config_dir.glob("automations/*.yaml"))
-    auto_files.extend(config_dir.glob("packages/**/*.yaml"))
-
-    for yaml_file in auto_files:
-        try:
-            content = await hass.async_add_executor_job(yaml_file.read_text)
-            for line_num, line in enumerate(content.split("\n"), 1):
-                if regex.search(line):
-                    relative = yaml_file.relative_to(config_dir)
-                    matches.append(f"{relative}:{line_num}: {line.strip()}")
-        except Exception:
-            continue
+    matches, _disqualified, _files_searched = await hass.async_add_executor_job(
+        _grep_files_sync,
+        config_dir,
+        ["automations.yaml", "automations/*.yaml", "packages/**/*.yaml"],
+        [],
+        regex,
+        None,
+    )
 
     # Also check automation entity states for friendly names matching pattern
     auto_states = hass.states.async_all("automation")
@@ -553,63 +559,6 @@ async def _check_entity_count(hass: HomeAssistant, task: CheckTask) -> CheckResu
         title=task.title,
         passed=True,
         detail=f"{detail}\n\n{task.if_found if count > 0 else task.if_not_found}",
-        severity=task.severity,
-    )
-
-
-async def _check_ha_version(hass: HomeAssistant, task: CheckTask) -> CheckResult:
-    """Check if HA Core version meets minimum requirement."""
-    from packaging import version
-
-    pattern = task.pattern
-    if not pattern:
-        return CheckResult(
-            check_id="ha_version",
-            title=task.title,
-            passed=True,
-            detail=_CHECK_MESSAGES["ha_version"]["no_pattern"],
-            severity=task.severity,
-        )
-
-    try:
-        required_version = version.parse(pattern)
-    except Exception:
-        return CheckResult(
-            check_id="ha_version",
-            title=task.title,
-            passed=False,
-            detail=_CHECK_MESSAGES["ha_version"]["invalid_format"].format(pattern=pattern),
-            severity=task.severity,
-        )
-
-    from homeassistant import core as ha_core
-
-    current = ha_core.__version__
-    try:
-        current_version = version.parse(current)
-    except Exception:
-        return CheckResult(
-            check_id="ha_version",
-            title=task.title,
-            passed=False,
-            detail=_CHECK_MESSAGES["ha_version"]["parse_error"].format(current=current),
-            severity=task.severity,
-        )
-
-    if current_version >= required_version:
-        return CheckResult(
-            check_id="ha_version",
-            title=task.title,
-            passed=True,
-            detail=_CHECK_MESSAGES["ha_version"]["met"].format(current=current, pattern=pattern),
-            severity=task.severity,
-        )
-
-    return CheckResult(
-        check_id="ha_version",
-        title=task.title,
-        passed=False,
-        detail=_CHECK_MESSAGES["ha_version"]["not_met"].format(current=current, pattern=pattern),
         severity=task.severity,
     )
 
