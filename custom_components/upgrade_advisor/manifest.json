@@ -9,11 +9,9 @@
     "conversation"
   ],
   "documentation": "https://github.com/brianegge/ha-upgrade-advisor",
+  "homeassistant": "2024.7.0",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/brianegge/ha-upgrade-advisor/issues",
   "requirements": [],
-  "requires": [
-    "homeassistant >=2024.7.0"
-  ],
   "version": "1.0.6"
 }

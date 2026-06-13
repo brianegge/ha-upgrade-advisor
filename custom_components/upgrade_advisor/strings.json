@@ -102,19 +102,5 @@
     "github_fetch_failed": {
       "message": "Failed to fetch release notes from GitHub: {error}"
     }
-  },
-  "notifications": {
-    "error_ai_out_of_credits": {
-      "title": "Upgrade Advisor: {component} analysis failed",
-      "message": "**Error:** AI service out of credits. Add credits at https://openrouter.ai/settings/credits"
-    },
-    "error_ai_unavailable": {
-      "title": "Upgrade Advisor: {component} analysis failed",
-      "message": "**Error:** AI service unavailable — check your OpenRouter API key and credits. ({error})"
-    },
-    "error_generic": {
-      "title": "Upgrade Advisor: {component} analysis failed",
-      "message": "**Error:** {error}"
-    }
   }
 }
