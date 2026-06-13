@@ -537,7 +537,7 @@ class UpgradeAdvisorCoordinator:
         error_text = result.error or "Unknown error"
         if "402" in error_text or "credits" in error_text.lower():
             message = "**Error:** AI service out of credits. Add credits at https://openrouter.ai/settings/credits"
-        elif "talking to API" in error_text:
+        elif "talking to api" in error_text.lower():
             message = f"**Error:** AI service unavailable — check your OpenRouter API key and credits. ({error_text})"
         else:
             message = f"**Error:** {error_text}"

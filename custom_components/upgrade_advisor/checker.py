@@ -193,8 +193,8 @@ def _grep_files_sync(
         try:
             if search_file.stat().st_size > _MAX_FILE_SIZE_BYTES:
                 continue
-            content = search_file.read_text()
-        except OSError:
+            content = search_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             continue
         files_searched += 1
         try:
