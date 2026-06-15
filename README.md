@@ -58,7 +58,7 @@ Create a dashboard to view the full upgrade report:
 ```yaml
 type: markdown
 content: >-
-  {{ state_attr('sensor.upgrade_advisor', 'report') }}
+  {{ state_attr('sensor.upgrade_advisor_status', 'report') }}
 ```
 
 Notifications will automatically link to this dashboard. The default path is `upgrade-advisor` and can be changed in the integration options.
@@ -112,9 +112,9 @@ No action required — safe to upgrade.
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| `sensor.upgrade_advisor` | Sensor | Status: `idle` / `analyzing` / `report_ready` / `error` |
-| `sensor.upgrade_advisor_2` | Sensor | Risk level: `unknown` / `low` / `medium` / `high` |
-| `event.upgrade_advisor` | Event | Fires when a new report is generated |
+| `sensor.upgrade_advisor_status` | Sensor | Status: `idle` / `analyzing` / `report_ready` / `error` |
+| `sensor.upgrade_advisor_risk_level` | Sensor | Risk level: `unknown` / `low` / `medium` / `high` |
+| `event.upgrade_advisor_report` | Event | Fires when a new report is generated |
 
 ### Status Sensor Attributes
 
@@ -138,15 +138,15 @@ automation:
   - alias: "Notify on upgrade report"
     trigger:
       - platform: state
-        entity_id: sensor.upgrade_advisor
+        entity_id: sensor.upgrade_advisor_status
         to: "report_ready"
     action:
       - service: notify.mobile_app
         data:
           title: "Upgrade Advisor Report"
           message: >-
-            Risk: {{ states('sensor.upgrade_advisor_2') }}
-            Breaking changes: {{ state_attr('sensor.upgrade_advisor', 'breaking_change_count') }}
+            Risk: {{ states('sensor.upgrade_advisor_risk_level') }}
+            Breaking changes: {{ state_attr('sensor.upgrade_advisor_status', 'breaking_change_count') }}
             /upgrade-advisor
 ```
 
