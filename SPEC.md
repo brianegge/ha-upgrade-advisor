@@ -184,7 +184,7 @@ response = await async_converse(
 | Entity | Type | Description |
 |--------|------|-------------|
 | `sensor.upgrade_advisor_status` | Sensor (enum) | `idle` / `analyzing` / `report_ready` / `error` |
-| `sensor.upgrade_advisor_risk` | Sensor (enum) | `unknown` / `low` / `medium` / `high` — last assessed risk |
+| `sensor.upgrade_advisor_risk_level` | Sensor (enum) | `unknown` / `low` / `medium` / `high` — last assessed risk |
 | `event.upgrade_advisor_report` | Event | Fires when a new report is generated, with full report in event data |
 
 **Sensor attributes (status):**
