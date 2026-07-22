@@ -106,7 +106,8 @@ def test_summary_prompt_requires_quoted_lines_and_classification() -> None:
     assert "GROUNDING RULE" in prompt
     assert "likely affected" in prompt
     assert "likely safe" in prompt
-    assert "no malformed occurrences detected" in prompt
+    # Matches with no likely-affected lines are omitted, not narrated as INFO
+    assert "omit it entirely per the SILENCE" in prompt
     assert "Do NOT invent or paraphrase match content" in prompt
 
 

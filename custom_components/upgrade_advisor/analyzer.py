@@ -133,18 +133,19 @@ ONLY report on checks that were actually performed. Do not mention integrations 
 that were not checked. OMIT any section that would be empty.
 
 GROUNDING RULE for grep_config hits — when a grep_config check reports \
-matches, you MUST:
+matches and you include it in the report, you MUST:
 - Quote up to 3 of the matched lines VERBATIM (file:line: content) from the \
   check detail. These are the concrete evidence.
 - For each quoted line, classify it as one of:
   - **likely affected** — the line shape matches the bug described in the release notes
   - **likely safe** — the line uses the feature but not the bug shape
   - **unclear** — cannot tell without reviewing the surrounding YAML
-- If you cannot point at any line you'd label "likely affected," downgrade \
-  the check from breaking/warning to INFO and say so plainly: \
-  "Feature is in use; no malformed occurrences detected in {{N}} matches reviewed." \
-  Do NOT pad with vague warnings like "review these to ensure they are \
-  correctly formed" — that is noise, not advice.
+- If you cannot point at any line you'd label "likely affected" or \
+  "unclear", the check is a non-finding: omit it entirely per the SILENCE \
+  RULE below. Matches whose every line is "likely safe" are the same as no \
+  matches — do NOT write an INFO line about them, and do NOT pad with vague \
+  warnings like "review these to ensure they are correctly formed" — that \
+  is noise, not advice.
 
 Do NOT invent or paraphrase match content. If the detail says `foo.yaml:42: \
 bar: baz`, quote it as `foo.yaml:42: bar: baz`. Do not summarize it as "a \
@@ -154,8 +155,10 @@ VERDICT-FIRST RULE — the report MUST open with a one-line verdict, before \
 any section:
 - If no check found concrete impact: "**None of these changes affect your \
   installation — safe to upgrade.**" When this is the verdict, the ENTIRE \
-  report should be just that line plus a one-line backup confirmation. \
-  Do not add sections restating that each check found nothing.
+  report is exactly three parts, in this order: (1) that verdict line, \
+  (2) a one-line backup confirmation based on the backup_recent check \
+  result, (3) the RISK_LEVEL and BREAKING_CHANGES footer lines. Nothing \
+  else — do not add sections restating that each check found nothing.
 - If something IS affected: one line naming what, e.g. "**2 automations \
   reference the removed `foo.bar` service — fix before upgrading.**"
 
@@ -262,8 +265,12 @@ skip it entirely — do not include it with a "not affected" note.
 
 Open the report with a one-line verdict. If nothing in the release affects \
 this installation, the verdict is "**None of these changes affect your \
-installation — safe to upgrade.**" and the ENTIRE report is just that line — \
-no sections explaining what was checked or why each item doesn't apply.
+installation — safe to upgrade.**" and the ENTIRE report is exactly three \
+parts, in this order: (1) that verdict line, (2) a one-line reminder to \
+take a fresh backup before upgrading (no check data is available in this \
+mode to confirm one exists), (3) the RISK_LEVEL and BREAKING_CHANGES \
+footer lines. No sections explaining what was checked or why each item \
+doesn't apply.
 
 Otherwise, after the verdict include ONLY sections with real content (omit \
 any empty section):
