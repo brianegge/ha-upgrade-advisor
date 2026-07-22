@@ -110,6 +110,24 @@ def test_summary_prompt_requires_quoted_lines_and_classification() -> None:
     assert "Do NOT invent or paraphrase match content" in prompt
 
 
+def test_summary_prompt_leads_with_verdict_and_silences_non_findings() -> None:
+    """The summary prompt requires a verdict headline and forbids narrating non-findings."""
+    prompt = build_summary_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        current_version="2026.4.2",
+        target_version="2026.4.3",
+        check_results="",
+    )
+    assert "VERDICT-FIRST RULE" in prompt
+    assert "SILENCE RULE" in prompt
+    assert "None of these changes affect your" in prompt
+    # Checks that found nothing must be omitted, not explained away
+    assert "gets ZERO words" in prompt
+    # Mere feature presence is not impact
+    assert "is NOT impact" in prompt
+
+
 def test_build_post_upgrade_prompt_includes_pairs() -> None:
     """Post-upgrade prompt embeds the pre/post check pairs and version info."""
     pairs = format_check_pairs(
