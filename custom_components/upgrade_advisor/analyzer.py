@@ -156,9 +156,10 @@ any section:
 - If no check found concrete impact: "**None of these changes affect your \
   installation — safe to upgrade.**" When this is the verdict, the ENTIRE \
   report is exactly three parts, in this order: (1) that verdict line, \
-  (2) a one-line backup confirmation based on the backup_recent check \
-  result, (3) the RISK_LEVEL and BREAKING_CHANGES footer lines. Nothing \
-  else — do not add sections restating that each check found nothing.
+  (2) one line about backups — a confirmation based on the backup_recent \
+  check result if present, otherwise a reminder to take a fresh backup \
+  before upgrading, (3) the RISK_LEVEL and BREAKING_CHANGES footer lines. \
+  Nothing else — do not add sections restating that each check found nothing.
 - If something IS affected: one line naming what, e.g. "**2 automations \
   reference the removed `foo.bar` service — fix before upgrading.**"
 
