@@ -106,8 +106,52 @@ def test_summary_prompt_requires_quoted_lines_and_classification() -> None:
     assert "GROUNDING RULE" in prompt
     assert "likely affected" in prompt
     assert "likely safe" in prompt
-    assert "no malformed occurrences detected" in prompt
+    # Matches with no likely-affected lines are omitted, not narrated as INFO
+    assert "omit it entirely per the SILENCE" in prompt
     assert "Do NOT invent or paraphrase match content" in prompt
+
+
+def test_summary_prompt_leads_with_verdict_and_silences_non_findings() -> None:
+    """The summary prompt requires a verdict headline and forbids narrating non-findings."""
+    prompt = build_summary_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        current_version="2026.4.2",
+        target_version="2026.4.3",
+        check_results="",
+    )
+    assert "VERDICT-FIRST RULE" in prompt
+    assert "SILENCE RULE" in prompt
+    assert "None of these changes affect your" in prompt
+    # Checks that found nothing must be omitted, not explained away
+    assert "gets ZERO words" in prompt
+    # Mere feature presence is not impact
+    assert "is NOT impact" in prompt
+
+
+def test_single_pass_prompt_leads_with_verdict_and_forbids_padding() -> None:
+    """The legacy single-pass prompt pins the same verdict-first and no-padding rules."""
+    prompt = build_single_pass_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        current_version="2026.4.2",
+        target_version="2026.4.3",
+        release_notes="## Breaking Changes\n- Removed xyz",
+        context={
+            "integrations": "- hue: Philips Hue",
+            "devices": "### hue (5 devices)\n- Extended Color Light (5x): light",
+            "automations": "- Turn on lights (on)",
+            "addons": "- Mosquitto broker",
+        },
+        hacs_components="- HACS: 2.0.0",
+    )
+
+    assert "Open the report with a one-line verdict" in prompt
+    assert "None of these changes affect your" in prompt
+    # No-impact reports share the same shape as the summary prompt: verdict, backup line, footer
+    assert "RISK_LEVEL and BREAKING_CHANGES" in prompt
+    assert "backup before upgrading" in prompt
+    assert "Never pad the report" in prompt
 
 
 def test_build_post_upgrade_prompt_includes_pairs() -> None:

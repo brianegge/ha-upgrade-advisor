@@ -133,36 +133,53 @@ ONLY report on checks that were actually performed. Do not mention integrations 
 that were not checked. OMIT any section that would be empty.
 
 GROUNDING RULE for grep_config hits — when a grep_config check reports \
-matches, you MUST:
+matches and you include it in the report, you MUST:
 - Quote up to 3 of the matched lines VERBATIM (file:line: content) from the \
   check detail. These are the concrete evidence.
 - For each quoted line, classify it as one of:
   - **likely affected** — the line shape matches the bug described in the release notes
   - **likely safe** — the line uses the feature but not the bug shape
   - **unclear** — cannot tell without reviewing the surrounding YAML
-- If you cannot point at any line you'd label "likely affected," downgrade \
-  the check from breaking/warning to INFO and say so plainly: \
-  "Feature is in use; no malformed occurrences detected in {{N}} matches reviewed." \
-  Do NOT pad with vague warnings like "review these to ensure they are \
-  correctly formed" — that is noise, not advice.
+- If you cannot point at any line you'd label "likely affected" or \
+  "unclear", the check is a non-finding: omit it entirely per the SILENCE \
+  RULE below. Matches whose every line is "likely safe" are the same as no \
+  matches — do NOT write an INFO line about them, and do NOT pad with vague \
+  warnings like "review these to ensure they are correctly formed" — that \
+  is noise, not advice.
 
 Do NOT invent or paraphrase match content. If the detail says `foo.yaml:42: \
 bar: baz`, quote it as `foo.yaml:42: bar: baz`. Do not summarize it as "a \
 reference to bar."
 
-Structure the report as follows:
+VERDICT-FIRST RULE — the report MUST open with a one-line verdict, before \
+any section:
+- If no check found concrete impact: "**None of these changes affect your \
+  installation — safe to upgrade.**" When this is the verdict, the ENTIRE \
+  report is exactly three parts, in this order: (1) that verdict line, \
+  (2) one line about backups — a confirmation based on the backup_recent \
+  check result if present, otherwise a reminder to take a fresh backup \
+  before upgrading, (3) the RISK_LEVEL and BREAKING_CHANGES footer lines. \
+  Nothing else — do not add sections restating that each check found nothing.
+- If something IS affected: one line naming what, e.g. "**2 automations \
+  reference the removed `foo.bar` service — fix before upgrading.**"
 
-1. **What's New For You** — Lead with this section. List new features and \
-   opportunities from the post_upgrade checks, with evidence from the check \
-   results. For each, include what's new, which of your devices/automations \
-   benefit, and the PR or release note reference from the check context. \
-   Only include features for integrations that had checks performed.
+SILENCE RULE — a check that found nothing relevant gets ZERO words. Never \
+write "no matches were found", "this fix is not relevant to you", or "this \
+does not apply to your installation" — omit the item entirely. A feature \
+being merely *present* in the install (N entities exist) is NOT impact; \
+"verify your settings after upgrading" with no evidence of a problem is \
+noise, not a finding. Only report items where the checks produced concrete \
+evidence the user is affected or can adopt something new.
 
-2. **Breaking Changes** — Table of breaking change checks with status and \
-   evidence. Only include checks that were actually run. For grep_config \
-   hits, include the quoted lines + classifications per the grounding rule \
-   above. If all passed, summarize in one line: "All breaking change checks \
-   passed — safe to upgrade."
+After the verdict line, include ONLY sections that have real content:
+
+1. **What's New For You** — new features/opportunities where check results \
+   show the user's devices or automations actually benefit. Include the PR \
+   or release note reference from the check context.
+
+2. **Breaking Changes** — ONLY failed or unclear checks, with quoted lines \
+   + classifications per the grounding rule above. If all passed, omit this \
+   section entirely (the verdict line already says so).
 
 3. **Action Required** — Only if something ACTUALLY needs to be done \
    before upgrading. Must reference a specific "likely affected" line. \
@@ -170,7 +187,8 @@ Structure the report as follows:
 
 4. **Risk Assessment** — ONLY if risk is Medium or High. Omit for Low risk.
 
-Keep it short and factual.
+Keep it short and factual. A no-impact upgrade report should be 2-3 lines \
+total (before the RISK_LEVEL footer).
 
 End your response with:
 RISK_LEVEL: <Low|Medium|High>
@@ -246,7 +264,17 @@ integrations, devices, or services that are not present in the lists above. \
 If a breaking change applies to an integration this user does not have installed, \
 skip it entirely — do not include it with a "not affected" note.
 
-Produce a report with these sections:
+Open the report with a one-line verdict. If nothing in the release affects \
+this installation, the verdict is "**None of these changes affect your \
+installation — safe to upgrade.**" and the ENTIRE report is exactly three \
+parts, in this order: (1) that verdict line, (2) a one-line reminder to \
+take a fresh backup before upgrading (no check data is available in this \
+mode to confirm one exists), (3) the RISK_LEVEL and BREAKING_CHANGES \
+footer lines. No sections explaining what was checked or why each item \
+doesn't apply.
+
+Otherwise, after the verdict include ONLY sections with real content (omit \
+any empty section):
 1. **Breaking Changes** — changes that WILL affect this installation. Only list \
 changes for integrations/platforms that appear in the installed integrations or \
 devices lists above. Omit all others completely.
@@ -255,9 +283,10 @@ devices lists above. Omit all others completely.
 installed integrations
 4. **New Features** — relevant new capabilities for installed integrations only
 5. **Recommended Actions** — ordered checklist of what to do before/after upgrading
-6. **Risk Assessment** — Low/Medium/High with brief justification
+6. **Risk Assessment** — ONLY if Medium or High, with brief justification
 
-If there are no breaking changes for this installation, say so clearly and briefly.
+Never pad the report with items that don't apply or generic "verify things \
+still work" advice.
 
 End your response with a line in this exact format:
 RISK_LEVEL: <Low|Medium|High>
