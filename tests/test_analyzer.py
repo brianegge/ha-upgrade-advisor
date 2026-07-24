@@ -129,6 +129,32 @@ def test_summary_prompt_leads_with_verdict_and_silences_non_findings() -> None:
     assert "is NOT impact" in prompt
 
 
+def test_summary_prompt_requires_component_heading() -> None:
+    """The report must open with a heading naming the component and versions."""
+    prompt = build_summary_prompt(
+        upgrade_type="HACS Component",
+        component_name="Powercalc",
+        current_version="1.22.0",
+        target_version="1.23.0",
+        check_results="",
+    )
+    assert "HEADING RULE" in prompt
+    assert "## Powercalc 1.22.0 → 1.23.0" in prompt
+
+
+def test_single_pass_prompt_requires_component_heading() -> None:
+    """The fallback single-pass report must also open with the component heading."""
+    prompt = build_single_pass_prompt(
+        upgrade_type="HACS Component",
+        component_name="Powercalc",
+        current_version="1.22.0",
+        target_version="1.23.0",
+        release_notes="Notes",
+        context={},
+    )
+    assert "## Powercalc 1.22.0 → 1.23.0" in prompt
+
+
 def test_single_pass_prompt_leads_with_verdict_and_forbids_padding() -> None:
     """The legacy single-pass prompt pins the same verdict-first and no-padding rules."""
     prompt = build_single_pass_prompt(
@@ -146,7 +172,7 @@ def test_single_pass_prompt_leads_with_verdict_and_forbids_padding() -> None:
         hacs_components="- HACS: 2.0.0",
     )
 
-    assert "Open the report with a one-line verdict" in prompt
+    assert "Immediately after the heading, a one-line verdict" in prompt
     assert "None of these changes affect your" in prompt
     # No-impact reports share the same shape as the summary prompt: verdict, backup line, footer
     assert "RISK_LEVEL and BREAKING_CHANGES" in prompt
