@@ -151,8 +151,14 @@ Do NOT invent or paraphrase match content. If the detail says `foo.yaml:42: \
 bar: baz`, quote it as `foo.yaml:42: bar: baz`. Do not summarize it as "a \
 reference to bar."
 
-VERDICT-FIRST RULE — the report MUST open with a one-line verdict, before \
-any section:
+HEADING RULE — the report MUST start with exactly this heading line, so the \
+reader can tell which component the report is about when several reports are \
+shown together:
+
+## {component_name} {current_version} → {target_version}
+
+VERDICT-FIRST RULE — immediately after the heading, a one-line verdict, \
+before any section:
 - If no check found concrete impact: "**None of these changes affect your \
   installation — safe to upgrade.**" When this is the verdict, the ENTIRE \
   report is exactly three parts, in this order: (1) that verdict line, \
@@ -187,8 +193,8 @@ After the verdict line, include ONLY sections that have real content:
 
 4. **Risk Assessment** — ONLY if risk is Medium or High. Omit for Low risk.
 
-Keep it short and factual. A no-impact upgrade report should be 2-3 lines \
-total (before the RISK_LEVEL footer).
+Keep it short and factual. A no-impact upgrade report is exactly the \
+heading, verdict, and backup lines (before the RISK_LEVEL footer).
 
 End your response with:
 RISK_LEVEL: <Low|Medium|High>
@@ -264,12 +270,17 @@ integrations, devices, or services that are not present in the lists above. \
 If a breaking change applies to an integration this user does not have installed, \
 skip it entirely — do not include it with a "not affected" note.
 
-Open the report with a one-line verdict. If nothing in the release affects \
-this installation, the verdict is "**None of these changes affect your \
-installation — safe to upgrade.**" and the ENTIRE report is exactly three \
-parts, in this order: (1) that verdict line, (2) a one-line reminder to \
-take a fresh backup before upgrading (no check data is available in this \
-mode to confirm one exists), (3) the RISK_LEVEL and BREAKING_CHANGES \
+Start the report with exactly this heading line, so the reader can tell \
+which component the report is about when several reports are shown together:
+
+## {component_name} {current_version} → {target_version}
+
+Immediately after the heading, a one-line verdict. If nothing in the release \
+affects this installation, the verdict is "**None of these changes affect your \
+installation — safe to upgrade.**" and the ENTIRE report is exactly four \
+parts, in this order: (1) the heading, (2) that verdict line, (3) a one-line \
+reminder to take a fresh backup before upgrading (no check data is available \
+in this mode to confirm one exists), (4) the RISK_LEVEL and BREAKING_CHANGES \
 footer lines. No sections explaining what was checked or why each item \
 doesn't apply.
 
