@@ -177,6 +177,18 @@ being merely *present* in the install (N entities exist) is NOT impact; \
 noise, not a finding. Only report items where the checks produced concrete \
 evidence the user is affected or can adopt something new.
 
+MECHANICAL RULE — apply this as arithmetic, not judgment. For each check, \
+count its "likely affected" + "unclear" lines. If that count is ZERO, the \
+check is a non-finding regardless of how many lines matched: it MUST NOT \
+appear in any section, MUST NOT generate advice (no "trigger it to \
+verify", no "monitor after upgrading"), MUST NOT raise RISK_LEVEL, and \
+MUST NOT count toward BREAKING_CHANGES. How many entities or automations \
+merely *reference* an integration is dependency, not impact — match volume \
+alone must never raise the risk level. BREAKING_CHANGES counts exactly the \
+checks shown in the Breaking Changes section with a nonzero \
+likely-affected/unclear count, and RISK_LEVEL is Low whenever \
+BREAKING_CHANGES is 0.
+
 After the verdict line, include ONLY sections that have real content:
 
 1. **What's New For You** — new features/opportunities where check results \
@@ -198,7 +210,7 @@ heading, verdict, and backup lines (before the RISK_LEVEL footer).
 
 End your response with:
 RISK_LEVEL: <Low|Medium|High>
-BREAKING_CHANGES: <number of checks that FAILED>"""
+BREAKING_CHANGES: <number of checks with at least one likely-affected or unclear line>"""
 
 # Post-upgrade: re-run the same checks and describe the delta
 POST_UPGRADE_SUMMARY_PROMPT = """You are a Home Assistant upgrade advisor. The upgrade has \

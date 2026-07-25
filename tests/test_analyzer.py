@@ -129,6 +129,24 @@ def test_summary_prompt_leads_with_verdict_and_silences_non_findings() -> None:
     assert "is NOT impact" in prompt
 
 
+def test_summary_prompt_mechanical_rule() -> None:
+    """Zero likely-affected lines must mechanically zero out the check's report impact."""
+    prompt = build_summary_prompt(
+        upgrade_type="HACS Component",
+        component_name="Alexa Media Player",
+        current_version="5.15.6",
+        target_version="5.15.7",
+        check_results="",
+    )
+    assert "MECHANICAL RULE" in prompt
+    assert "arithmetic, not judgment" in prompt
+    # Match volume / dependency must not inflate risk
+    assert "must never raise the risk level" in prompt
+    # Risk and breaking count are derived, not vibes
+    assert "RISK_LEVEL is Low whenever" in prompt
+    assert "at least one likely-affected or unclear line" in prompt
+
+
 def test_summary_prompt_requires_component_heading() -> None:
     """The report must open with a heading naming the component and versions."""
     prompt = build_summary_prompt(
