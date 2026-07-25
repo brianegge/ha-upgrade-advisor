@@ -4,14 +4,37 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.upgrade_advisor import _component_anchor
+from custom_components.upgrade_advisor import _component_anchor, _resolve_release_url
 from custom_components.upgrade_advisor.analyzer import AnalysisResult
 from custom_components.upgrade_advisor.const import CONF_AGENT_ID, DOMAIN
 
 from .conftest import MOCK_AGENT_ID
+
+# --- _resolve_release_url ---
+
+
+def test_resolve_release_url_prefers_entity_attribute() -> None:
+    """The update entity's release_url wins when present."""
+    state = State("update.core", "on", {"release_url": "https://www.home-assistant.io/latest-release-notes/"})
+    url = _resolve_release_url(state, None, "2026.7.4")
+    assert url == "https://www.home-assistant.io/latest-release-notes/"
+
+
+def test_resolve_release_url_falls_back_to_repo_tag() -> None:
+    """A HACS component without an entity release_url gets the GitHub tag URL."""
+    state = State("update.amp", "on", {"release_url": ""})
+    url = _resolve_release_url(state, "alandtse/alexa_media_player", "v5.15.7")
+    assert url == "https://github.com/alandtse/alexa_media_player/releases/tag/v5.15.7"
+
+
+def test_resolve_release_url_falls_back_to_core_tag() -> None:
+    """No entity and no repo (e.g. analyze_version) falls back to the core tag URL."""
+    url = _resolve_release_url(None, None, "2026.8.0")
+    assert url == "https://github.com/home-assistant/core/releases/tag/2026.8.0"
+
 
 # --- _component_anchor ---
 
