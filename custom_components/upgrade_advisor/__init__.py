@@ -9,7 +9,7 @@ from typing import Any
 from aiohttp import ClientSession
 from homeassistant.components.persistent_notification import async_create as async_create_notification
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
@@ -400,15 +400,8 @@ class UpgradeAdvisorCoordinator:
 
         # Link the heading to the full release notes
         if not result.error:
-            release_url = ""
-            if entity_id and (update_state := self.hass.states.get(entity_id)):
-                release_url = update_state.attributes.get("release_url") or ""
-            if not release_url:
-                if repo:
-                    release_url = f"https://github.com/{repo}/releases/tag/{target_version}"
-                else:
-                    release_url = f"https://github.com/home-assistant/core/releases/tag/{target_version}"
-            result.report = add_release_link(result.report, release_url)
+            update_state = self.hass.states.get(entity_id) if entity_id else None
+            result.report = add_release_link(result.report, _resolve_release_url(update_state, repo, target_version))
 
         # Store results
         self._store_result(result)
@@ -702,6 +695,17 @@ class UpgradeAdvisorCoordinator:
             lines.append(f"- {name}: {installed}{update_available}")
 
         return "\n".join(lines) if lines else "No HACS components detected."
+
+
+def _resolve_release_url(update_state: State | None, repo: str | None, target_version: str) -> str:
+    """Pick the best release-notes URL: entity attribute, else the GitHub tag page."""
+    if update_state is not None:
+        url = update_state.attributes.get("release_url") or ""
+        if url:
+            return url
+    if repo:
+        return f"https://github.com/{repo}/releases/tag/{target_version}"
+    return f"https://github.com/home-assistant/core/releases/tag/{target_version}"
 
 
 def _component_anchor(name: str) -> str:
