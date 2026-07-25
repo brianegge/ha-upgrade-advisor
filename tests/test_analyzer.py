@@ -129,6 +129,29 @@ def test_summary_prompt_leads_with_verdict_and_silences_non_findings() -> None:
     assert "is never a warning" in prompt
 
 
+def test_add_release_link_links_heading() -> None:
+    """The component heading becomes a link to the full release notes."""
+    from custom_components.upgrade_advisor.analyzer import add_release_link
+
+    report = "## Powercalc 1.22.0 → 1.23.0\n\n**Safe to upgrade.**\n\n## Sub-section"
+    url = "https://github.com/bramstroker/homeassistant-powercalc/releases/tag/v1.23.0"
+    linked = add_release_link(report, url)
+    assert linked.startswith(f"## [Powercalc 1.22.0 → 1.23.0]({url})")
+    # Only the first heading is linked
+    assert "## Sub-section" in linked
+
+
+def test_add_release_link_fallback_and_noops() -> None:
+    """No heading appends a trailing link; empty url/report pass through unchanged."""
+    from custom_components.upgrade_advisor.analyzer import add_release_link
+
+    assert add_release_link("no heading here", "https://x.example/r").endswith(
+        "[Full release notes](https://x.example/r)"
+    )
+    assert add_release_link("## H\nbody", "") == "## H\nbody"
+    assert add_release_link("", "https://x.example/r") == ""
+
+
 def test_planning_prompt_skips_unowned_hardware() -> None:
     """Device-conditional fixes must be verified against the device list or skipped."""
     prompt = build_planning_prompt(
