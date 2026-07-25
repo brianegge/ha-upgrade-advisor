@@ -210,6 +210,11 @@ def test_summary_prompt_requires_component_heading() -> None:
     )
     assert "HEADING RULE" in prompt
     assert "## Powercalc 1.22.0 → 1.23.0" in prompt
+    # The heading must be introduced BEFORE the verdict rule, and the
+    # no-impact contract must enumerate it as one of exactly four parts
+    assert prompt.index("## Powercalc 1.22.0 → 1.23.0") < prompt.index("VERDICT-FIRST RULE")
+    assert "exactly four parts" in prompt
+    assert "(1) the component/version heading" in prompt
 
 
 def test_single_pass_prompt_requires_component_heading() -> None:
@@ -223,6 +228,11 @@ def test_single_pass_prompt_requires_component_heading() -> None:
         context={},
     )
     assert "## Powercalc 1.22.0 → 1.23.0" in prompt
+    # Heading instruction precedes the verdict instruction
+    assert prompt.index("## Powercalc 1.22.0 → 1.23.0") < prompt.index(
+        "Immediately after the heading, a one-line verdict"
+    )
+    assert "exactly four parts" in prompt
 
 
 def test_single_pass_prompt_leads_with_verdict_and_forbids_padding() -> None:

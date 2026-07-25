@@ -175,12 +175,13 @@ before any section. Three cases:
   backup line, the What's New For You section, and the footer.
 - Nothing needs fixing and nothing relevant is new: "**None of these \
   changes affect your installation — safe to upgrade.**" When this is the \
-  verdict, the ENTIRE report is exactly three parts, in this order: \
-  (1) that verdict line, (2) one line about backups — a confirmation based \
-  on the backup_recent check result if present, otherwise a reminder to \
-  take a fresh backup before upgrading, (3) the RISK_LEVEL and \
-  BREAKING_CHANGES footer lines. Nothing else — do not add sections \
-  restating that each check found nothing.
+  verdict, the ENTIRE report is exactly four parts, in this order: \
+  (1) the component/version heading, (2) that verdict line, (3) one line \
+  about backups — a confirmation based on the backup_recent check result \
+  if present, otherwise a reminder to take a fresh backup before \
+  upgrading, (4) the RISK_LEVEL and BREAKING_CHANGES footer lines. \
+  Nothing else — do not add sections restating that each check found \
+  nothing.
 
 SILENCE RULE — a check that found nothing relevant gets ZERO words. Never \
 write "no matches were found", "this fix is not relevant to you", or "this \
