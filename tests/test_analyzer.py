@@ -122,11 +122,40 @@ def test_summary_prompt_leads_with_verdict_and_silences_non_findings() -> None:
     )
     assert "VERDICT-FIRST RULE" in prompt
     assert "SILENCE RULE" in prompt
-    assert "None of these changes affect your" in prompt
+    assert "changes affect your installation — safe to upgrade" in prompt
     # Checks that found nothing must be omitted, not explained away
     assert "gets ZERO words" in prompt
-    # Mere feature presence is not impact
-    assert "is NOT impact" in prompt
+    # Mere feature presence is not a warning or risk driver
+    assert "is never a warning" in prompt
+
+
+def test_planning_prompt_skips_unowned_hardware() -> None:
+    """Device-conditional fixes must be verified against the device list or skipped."""
+    prompt = build_planning_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        current_version="2026.7.2",
+        target_version="2026.7.4",
+        release_notes="Notes",
+        context={"integrations": "- unifi", "devices": "- gateway"},
+    )
+    assert "hardware the user does not own is never worth" in prompt
+
+
+def test_summary_prompt_relevance_rule_bans_conditional_items() -> None:
+    """What's New items must be verified relevant — no 'if you have X' lines."""
+    prompt = build_summary_prompt(
+        upgrade_type="Home Assistant Core",
+        component_name="Home Assistant",
+        current_version="2026.7.2",
+        target_version="2026.7.4",
+        check_results="",
+    )
+    assert "RELEVANCE rule" in prompt
+    assert "applies integration-wide" in prompt
+    assert "NEVER write a conditional item" in prompt
+    # A middle verdict exists for no-action-but-relevant-improvements
+    assert "this release improves" in prompt
 
 
 def test_summary_prompt_mechanical_rule() -> None:

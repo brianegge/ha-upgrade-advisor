@@ -106,10 +106,17 @@ JSON array of check objects with these fields:
 Create checks in this order:
 1. `backup_recent`
 2. Breaking changes — ONLY for integrations in the installed list
-3. New features / opportunities — for each new feature relevant to an INSTALLED \
-   integration, check for existing usage. Use severity "post_upgrade". Include \
-   the PR link or release note reference in `context`. Set `if_found` to describe \
-   the opportunity.
+3. New features / opportunities — for each new feature or fix relevant to an \
+   INSTALLED integration, check for existing usage. Use severity "post_upgrade". \
+   Include the PR link or release note reference in `context`. Set `if_found` \
+   to describe the opportunity.
+
+   If a feature or fix only applies to specific hardware or a device class \
+   (e.g. a cellular WAN modem, a specific bulb model, a particular sensor \
+   type), look for that device in the Devices list above first. If the \
+   device is not listed and no check can confirm it exists, do NOT create \
+   the check — a fix for hardware the user does not own is never worth \
+   reporting. If it IS listed, name the confirmed device in `context`.
 
 Output ONLY the JSON array, no other text."""
 
@@ -158,24 +165,41 @@ shown together:
 ## {component_name} {current_version} → {target_version}
 
 VERDICT-FIRST RULE — immediately after the heading, a one-line verdict, \
-before any section:
-- If no check found concrete impact: "**None of these changes affect your \
-  installation — safe to upgrade.**" When this is the verdict, the ENTIRE \
-  report is exactly three parts, in this order: (1) that verdict line, \
-  (2) one line about backups — a confirmation based on the backup_recent \
-  check result if present, otherwise a reminder to take a fresh backup \
-  before upgrading, (3) the RISK_LEVEL and BREAKING_CHANGES footer lines. \
-  Nothing else — do not add sections restating that each check found nothing.
-- If something IS affected: one line naming what, e.g. "**2 automations \
-  reference the removed `foo.bar` service — fix before upgrading.**"
+before any section. Three cases:
+- Something needs fixing BEFORE upgrading: one line naming what, e.g. \
+  "**2 automations reference the removed `foo.bar` service — fix before \
+  upgrading.**"
+- Nothing needs fixing, but the release contains improvements relevant to \
+  this installation (per the RELEVANCE rule below): "**Safe to upgrade — \
+  this release improves <integration(s)> for you.**" Follow with the \
+  backup line, the What's New For You section, and the footer.
+- Nothing needs fixing and nothing relevant is new: "**None of these \
+  changes affect your installation — safe to upgrade.**" When this is the \
+  verdict, the ENTIRE report is exactly three parts, in this order: \
+  (1) that verdict line, (2) one line about backups — a confirmation based \
+  on the backup_recent check result if present, otherwise a reminder to \
+  take a fresh backup before upgrading, (3) the RISK_LEVEL and \
+  BREAKING_CHANGES footer lines. Nothing else — do not add sections \
+  restating that each check found nothing.
 
 SILENCE RULE — a check that found nothing relevant gets ZERO words. Never \
 write "no matches were found", "this fix is not relevant to you", or "this \
 does not apply to your installation" — omit the item entirely. A feature \
-being merely *present* in the install (N entities exist) is NOT impact; \
-"verify your settings after upgrading" with no evidence of a problem is \
-noise, not a finding. Only report items where the checks produced concrete \
-evidence the user is affected or can adopt something new.
+being merely *present* in the install (N entities exist) is never a \
+warning, an action item, or a reason to raise risk; at most it qualifies \
+an item for What's New For You under the RELEVANCE rule. "Verify your \
+settings after upgrading" with no evidence of a problem is noise, not a \
+finding.
+
+RELEVANCE rule for What's New For You — this section is informational: \
+one line per item, no advice, no risk language, no "verify after \
+upgrading". Include an item ONLY if:
+- the change applies integration-wide to an integration the user actively \
+  uses (a check confirmed its entities), OR
+- the change applies to specific hardware/devices AND a check confirmed \
+  that specific device or entity type exists in this installation.
+NEVER write a conditional item: if the line would need "if you have/use \
+X", the condition was not verified and the item MUST be omitted.
 
 MECHANICAL RULE — apply this as arithmetic, not judgment. For each check, \
 count its "likely affected" + "unclear" lines. If that count is ZERO, the \
@@ -191,9 +215,9 @@ BREAKING_CHANGES is 0.
 
 After the verdict line, include ONLY sections that have real content:
 
-1. **What's New For You** — new features/opportunities where check results \
-   show the user's devices or automations actually benefit. Include the PR \
-   or release note reference from the check context.
+1. **What's New For You** — items passing the RELEVANCE rule, one \
+   informational line each. Include the PR or release note reference from \
+   the check context.
 
 2. **Breaking Changes** — ONLY failed or unclear checks, with quoted lines \
    + classifications per the grounding rule above. If all passed, omit this \
@@ -304,7 +328,9 @@ devices lists above. Omit all others completely.
 2. **Prerequisites** — things that must be done BEFORE upgrading
 3. **Deprecations** — things that still work but should be migrated, only for \
 installed integrations
-4. **New Features** — relevant new capabilities for installed integrations only
+4. **New Features** — relevant new capabilities for installed integrations \
+only. Never conditional on unconfirmed hardware — if the line would need \
+"if you have/use X", omit it.
 5. **Recommended Actions** — ordered checklist of what to do before/after upgrading
 6. **Risk Assessment** — ONLY if Medium or High, with brief justification
 
