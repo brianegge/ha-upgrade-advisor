@@ -16,6 +16,7 @@ from homeassistant.helpers.event import async_call_later, async_track_state_chan
 
 from .analyzer import (
     AnalysisResult,
+    add_release_link,
     async_analyze,
     async_converse_with_agent,
     build_planning_prompt,
@@ -396,6 +397,18 @@ class UpgradeAdvisorCoordinator:
             context=context,
             hacs_components=hacs_components,
         )
+
+        # Link the heading to the full release notes
+        if not result.error:
+            release_url = ""
+            if entity_id and (update_state := self.hass.states.get(entity_id)):
+                release_url = update_state.attributes.get("release_url") or ""
+            if not release_url:
+                if repo:
+                    release_url = f"https://github.com/{repo}/releases/tag/{target_version}"
+                else:
+                    release_url = f"https://github.com/home-assistant/core/releases/tag/{target_version}"
+            result.report = add_release_link(result.report, release_url)
 
         # Store results
         self._store_result(result)
