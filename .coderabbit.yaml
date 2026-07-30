@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# Security-focused review configuration. The threat model this encodes:
+# release notes are untrusted third-party text (any installed HACS repo),
+# the LLM that reads them is therefore attacker-influenced, and everything
+# the LLM emits (check tasks, regex patterns, report text) is untrusted
+# input to the integration. See README "Security" and hacs/default#6780.
+
+reviews:
+  path_instructions:
+    - path: "custom_components/upgrade_advisor/**"
+      instructions: |
+        This integration feeds untrusted third-party release notes to an LLM
+        and executes the LLM's structured output against the user's Home
+        Assistant instance. Treat ALL LLM output (check tasks, regex
+        patterns, file globs, report text) as attacker-controlled input.
+        Flag as a security issue any change that:
+
+        1. Reads secrets or credential stores: any file access touching
+           secrets*.yaml, the .storage/ tree, .cloud/, or known_devices.yaml,
+           whether via open(), Path.read_text(), glob, or os.walk.
+        2. Uses LLM-supplied data in a sink without validation: a pattern,
+           path, glob, entity_id, or service name from a CheckTask (or any
+           parsed model output) reaching re.compile/re.search, filesystem
+           access, hass.services calls, or subprocess without first passing
+           validate_check_pattern() or an equivalent allowlist.
+        3. Weakens existing guards: changes to validate_check_pattern(),
+           _is_sensitive_file(), _redact_matched_line(), or the bounds
+           constants (_MAX_PATTERN_LENGTH, _MAX_LINE_LENGTH, _MAX_MATCHES,
+           _MAX_MATCH_DISPLAY_LENGTH, _MAX_FILE_SIZE_BYTES,
+           _REGEX_TIMEOUT_SECONDS) that broaden what is searched, matched,
+           or reported, or removing the regex-module timeout from a search.
+        4. Leaks config content off-box: matched file lines, entity
+           attributes, or state values flowing into an LLM prompt
+           (analyzer.py prompts, conversation agent calls) without redaction
+           of credential-like values (password, token, api_key, secret,
+           credential, bearer, private_key).
+        5. Introduces ReDoS surface: compiling a regex from a variable
+           (not a string literal) without a length cap and a nested-
+           quantifier check, or matching unbounded input lines.
+        6. Weakens prompt-injection defenses: removing the untrusted-data
+           delimiters/instructions around {release_notes} in analyzer.py,
+           or interpolating new untrusted text into prompts without marking
+           it as data.
+
+        Do not accept "the LLM would never emit that" as a mitigation — the
+        LLM's input includes text written by arbitrary third parties.
+
+    - path: "tests/**"
+      instructions: |
+        If a change deletes or weakens tests that pin security invariants
+        (pattern validation, secret redaction, sensitive-file exclusion in
+        test_checker.py), call it out as a security regression, not test
+        cleanup.
+
+  pre_merge_checks:
+    custom_checks:
+      - name: "No secret/storage file access"
+        mode: error
+        instructions: |
+          Fail if any changed line in custom_components/ adds code that
+          reads, globs, or walks: secrets*.yaml, anything under .storage/,
+          .cloud/, or other Home Assistant credential stores. Reading via
+          any API counts (open, Path.read_text, Path.glob, os.walk,
+          aiofiles, etc.). Test fixtures under tests/ are exempt.
+          Pass otherwise.
+
+      - name: "LLM output validated before use"
+        mode: error
+        instructions: |
+          Fail if any changed line in custom_components/ passes data derived
+          from LLM output (CheckTask fields such as pattern,
+          unaffected_shape, files, entity_id, integration, or any value
+          parsed from a model response) to re.compile, re.search, file
+          access, glob, hass.services, or subprocess without the value first
+          going through validate_check_pattern() or an explicit
+          allowlist/schema validation visible in the diff or existing code.
+          Pass if no such flow is added or all new flows are validated.
+
+      - name: "Redaction before prompts"
+        mode: error
+        instructions: |
+          Fail if any changed line adds user config content (matched file
+          lines, YAML values, entity attributes, state values) to a string
+          that is sent to a conversation agent or LLM prompt without
+          passing through _redact_matched_line() or equivalent
+          credential-value redaction. Pass if no such flow is added or all
+          new flows are redacted.
+
+      - name: "Dynamic regex is bounded"
+        mode: warning
+        instructions: |
+          Fail if a changed line compiles or matches a regex whose pattern
+          is not a string literal, unless the pattern was validated with
+          validate_check_pattern() (or an equivalent length + complexity
+          check) and the matched input is length-bounded. Pass otherwise.

@@ -8,6 +8,7 @@ import re
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+import regex
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
@@ -156,33 +157,97 @@ async def _run_single_check(hass: HomeAssistant, task: CheckTask) -> CheckResult
 
 
 _MAX_FILE_SIZE_BYTES = 2_000_000
+_MAX_PATTERN_LENGTH = 200
+_MAX_LINE_LENGTH = 1000
+_MAX_MATCHES = 50
+_MAX_MATCH_DISPLAY_LENGTH = 200
+# Hard per-search execution bound (regex module timeout). The heuristic below
+# rejects the obvious catastrophic shapes; this catches everything it misses.
+_REGEX_TIMEOUT_SECONDS = 0.25
+
+# A quantifier applied to a group that itself contains a quantifier — the
+# classic catastrophic-backtracking shape (e.g. `(a+)+` or `(a{2,})+`).
+_NESTED_QUANTIFIER = re.compile(r"\([^)]*[*+{][^)]*\)\s*[*+{]")
+
+_SECRET_KEYWORDS = (
+    "password",
+    "passwd",
+    "pwd",
+    "token",
+    "api_key",
+    "apikey",
+    "secret",
+    "credential",
+    "bearer",
+    "private_key",
+)
+
+# `key: value` or `key=value` where the key names a credential, with the key
+# optionally quoted ('password': / "password":). The value is redacted before
+# the line leaves this module; `!secret name` references are indirections,
+# not values, and stay visible.
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)([\"']?\w*(?:" + "|".join(_SECRET_KEYWORDS) + r")\w*[\"']?\s*[:=]\s*)(?!!secret\b)(\S.*)"
+)
+
+
+def validate_check_pattern(pattern: str) -> str | None:
+    """Validate a model-supplied regex. Returns a rejection reason, or None if OK.
+
+    The pattern originates from LLM output steered by third-party release
+    notes, so it is untrusted: bound its size, refuse catastrophic-
+    backtracking shapes, and refuse patterns that hunt for credentials.
+    """
+    if len(pattern) > _MAX_PATTERN_LENGTH:
+        return f"pattern exceeds {_MAX_PATTERN_LENGTH} characters"
+    try:
+        regex.compile(pattern)
+    except regex.error as err:
+        return f"invalid regex: {err}"
+    if _NESTED_QUANTIFIER.search(pattern):
+        return "nested quantifiers (catastrophic backtracking risk)"
+    lowered = pattern.lower()
+    if sum(1 for kw in _SECRET_KEYWORDS if kw in lowered) >= 2:
+        return "matches multiple credential keywords — refusing to search for secrets"
+    return None
+
+
+def _redact_matched_line(line: str) -> str:
+    """Redact credential values from a matched line before it is reported."""
+    line = line.strip()[:_MAX_MATCH_DISPLAY_LENGTH]
+    return _SENSITIVE_ASSIGNMENT.sub(r"\1<redacted>", line)
+
+
+def _is_sensitive_file(path: Path) -> bool:
+    """Files that must never be grepped: secrets files and the .storage tree."""
+    if any(part == ".storage" for part in path.parts):
+        return True
+    name = path.name.lower()
+    return "secret" in name and name.endswith((".yaml", ".yml"))
 
 
 def _grep_files_sync(
     config_dir: Path,
     glob_patterns: list[str],
-    extra_glob_roots: list[tuple[str, str]],
-    regex: re.Pattern[str],
-    disqualifier: re.Pattern[str] | None,
+    compiled: regex.Pattern,
+    disqualifier: regex.Pattern | None,
 ) -> tuple[list[str], int, int]:
     """Walk the config tree and grep matching lines. Runs in an executor.
 
-    extra_glob_roots is a list of (subdir, pattern) tuples — the subdir is
-    probed via is_dir() and only globbed if present. Returns
-    (matches, disqualified_count, files_searched).
+    Skips secrets files and the .storage tree, bounds line length before
+    matching, redacts credential values from matched lines, and stops after
+    _MAX_MATCHES matches. Each search carries a hard timeout; TimeoutError
+    propagates to the caller. Returns (matches, disqualified_count,
+    files_searched).
     """
     search_files: list[Path] = []
     for pattern in glob_patterns:
         search_files.extend(config_dir.glob(pattern))
-    for subdir, pattern in extra_glob_roots:
-        root = config_dir / subdir
-        if root.is_dir():
-            search_files.extend(root.glob(pattern))
 
     seen: set[Path] = set()
     unique_files: list[Path] = []
     for f in search_files:
-        if f not in seen:
+        if f not in seen and not _is_sensitive_file(f):
             seen.add(f)
             unique_files.append(f)
 
@@ -190,6 +255,8 @@ def _grep_files_sync(
     disqualified = 0
     files_searched = 0
     for search_file in unique_files:
+        if len(matches) >= _MAX_MATCHES:
+            break
         try:
             if search_file.stat().st_size > _MAX_FILE_SIZE_BYTES:
                 continue
@@ -202,12 +269,15 @@ def _grep_files_sync(
         except ValueError:
             relative = search_file
         for line_num, line in enumerate(content.split("\n"), 1):
-            if not regex.search(line):
+            if len(matches) >= _MAX_MATCHES:
+                break
+            line = line[:_MAX_LINE_LENGTH]
+            if not compiled.search(line, timeout=_REGEX_TIMEOUT_SECONDS):
                 continue
-            if disqualifier is not None and disqualifier.search(line):
+            if disqualifier is not None and disqualifier.search(line, timeout=_REGEX_TIMEOUT_SECONDS):
                 disqualified += 1
                 continue
-            matches.append(f"{relative}:{line_num}: {line.strip()}")
+            matches.append(f"{relative}:{line_num}: {_redact_matched_line(line)}")
     return matches, disqualified, files_searched
 
 
@@ -224,22 +294,48 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
             severity=task.severity,
         )
 
-    regex = re.compile(pattern, re.IGNORECASE)
-    disqualifier: re.Pattern[str] | None = None
-    if task.unaffected_shape:
-        try:
-            disqualifier = re.compile(task.unaffected_shape, re.IGNORECASE)
-        except re.error:
-            _LOGGER.warning("Invalid unaffected_shape regex for '%s': %s", task.title, task.unaffected_shape)
+    rejection = validate_check_pattern(pattern)
+    if rejection:
+        _LOGGER.warning("Rejected grep pattern for '%s': %s (%s)", task.title, pattern, rejection)
+        return CheckResult(
+            check_id="grep_config",
+            title=task.title,
+            passed=True,
+            detail=f"Check skipped — unsafe search pattern rejected ({rejection})",
+            severity="info",
+        )
 
-    matches, disqualified, files_searched = await hass.async_add_executor_job(
-        _grep_files_sync,
-        config_dir,
-        ["*.yaml", "packages/**/*.yaml", "integrations/**/*.yaml", "mqtt/**/*.yaml"],
-        [(".storage", "lovelace.*")],
-        regex,
-        disqualifier,
-    )
+    compiled = regex.compile(pattern, regex.IGNORECASE)
+    disqualifier: regex.Pattern | None = None
+    if task.unaffected_shape:
+        shape_rejection = validate_check_pattern(task.unaffected_shape)
+        if shape_rejection is None:
+            disqualifier = regex.compile(task.unaffected_shape, regex.IGNORECASE)
+        else:
+            _LOGGER.warning(
+                "Rejected unaffected_shape regex for '%s': %s (%s)",
+                task.title,
+                task.unaffected_shape,
+                shape_rejection,
+            )
+
+    try:
+        matches, disqualified, files_searched = await hass.async_add_executor_job(
+            _grep_files_sync,
+            config_dir,
+            ["*.yaml", "packages/**/*.yaml", "integrations/**/*.yaml", "mqtt/**/*.yaml"],
+            compiled,
+            disqualifier,
+        )
+    except TimeoutError:
+        _LOGGER.warning("Grep pattern for '%s' timed out: %s", task.title, pattern)
+        return CheckResult(
+            check_id="grep_config",
+            title=task.title,
+            passed=True,
+            detail="Check skipped — search pattern timed out (catastrophic backtracking)",
+            severity="info",
+        )
 
     disqualified_note = (
         f" ({disqualified} well-formed occurrence(s) filtered out by unaffected_shape)" if disqualified else ""
@@ -372,26 +468,48 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
             severity=task.severity,
         )
 
+    rejection = validate_check_pattern(pattern)
+    if rejection:
+        _LOGGER.warning("Rejected automation pattern for '%s': %s (%s)", task.title, pattern, rejection)
+        return CheckResult(
+            check_id="automation_references",
+            title=task.title,
+            passed=True,
+            detail=f"Check skipped — unsafe search pattern rejected ({rejection})",
+            severity="info",
+        )
+
     # Search automation YAML files — offloaded to executor for filesystem I/O
     config_dir = Path(hass.config.path())
-    regex = re.compile(pattern, re.IGNORECASE)
+    compiled = regex.compile(pattern, regex.IGNORECASE)
 
-    matches, _disqualified, _files_searched = await hass.async_add_executor_job(
-        _grep_files_sync,
-        config_dir,
-        ["automations.yaml", "automations/*.yaml", "packages/**/*.yaml"],
-        [],
-        regex,
-        None,
-    )
+    try:
+        matches, _disqualified, _files_searched = await hass.async_add_executor_job(
+            _grep_files_sync,
+            config_dir,
+            ["automations.yaml", "automations/*.yaml", "packages/**/*.yaml"],
+            compiled,
+            None,
+        )
 
-    # Also check automation entity states for friendly names matching pattern
-    auto_states = hass.states.async_all("automation")
-    entity_matches: list[str] = []
-    for state in auto_states:
-        friendly = state.attributes.get("friendly_name", "")
-        if regex.search(friendly) or regex.search(state.entity_id):
-            entity_matches.append(friendly or state.entity_id)
+        # Also check automation entity states for friendly names matching pattern
+        auto_states = hass.states.async_all("automation")
+        entity_matches: list[str] = []
+        for state in auto_states:
+            friendly = state.attributes.get("friendly_name", "")
+            if compiled.search(friendly, timeout=_REGEX_TIMEOUT_SECONDS) or compiled.search(
+                state.entity_id, timeout=_REGEX_TIMEOUT_SECONDS
+            ):
+                entity_matches.append(friendly or state.entity_id)
+    except TimeoutError:
+        _LOGGER.warning("Automation pattern for '%s' timed out: %s", task.title, pattern)
+        return CheckResult(
+            check_id="automation_references",
+            title=task.title,
+            passed=True,
+            detail="Check skipped — search pattern timed out (catastrophic backtracking)",
+            severity="info",
+        )
 
     all_matches = matches + [f"automation: {m}" for m in entity_matches]
 
