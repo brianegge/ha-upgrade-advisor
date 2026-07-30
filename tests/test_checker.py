@@ -10,17 +10,20 @@ from homeassistant.core import HomeAssistant
 from custom_components.upgrade_advisor.checker import (
     CheckResult,
     CheckTask,
+    _check_automation_references,
     _check_entity_available,
     _check_entity_count,
     _check_grep_config,
     _check_unavailable_entities,
     _count_diagnostic_unavailable,
     _get_entity_ids_for_integration,
+    _redact_matched_line,
     check_result_from_dict,
     check_result_to_dict,
     check_task_from_dict,
     check_task_to_dict,
     parse_check_tasks,
+    validate_check_pattern,
 )
 
 
@@ -392,6 +395,161 @@ async def test_check_entity_count_with_domain_no_match(hass: HomeAssistant) -> N
     assert result.passed is True
     assert "No 'esphome' light entities found" in result.detail
     assert "Skip — no ESPHome lights." in result.detail
+
+
+# --- pattern validation / grep hardening ---
+
+
+def test_validate_pattern_accepts_normal_patterns() -> None:
+    """Ordinary bug-shape patterns are accepted."""
+    assert validate_check_pattern(r"device_class:\s*$") is None
+    assert validate_check_pattern(r"platform:\s*template") is None
+    assert validate_check_pattern(r"api_key:") is None  # single credential keyword is fine
+
+
+def test_validate_pattern_rejects_too_long() -> None:
+    """Patterns over the length cap are rejected."""
+    assert validate_check_pattern("a" * 201) is not None
+
+
+def test_validate_pattern_rejects_invalid_regex() -> None:
+    """Uncompilable regexes are rejected with a reason."""
+    reason = validate_check_pattern("[unclosed")
+    assert reason is not None
+    assert "invalid regex" in reason
+
+
+def test_validate_pattern_rejects_nested_quantifiers() -> None:
+    """Catastrophic-backtracking shapes are rejected."""
+    assert validate_check_pattern(r"(a+)+b") is not None
+    assert validate_check_pattern(r"(\w*)*x") is not None
+    assert validate_check_pattern(r"(a{2,})+b") is not None
+    assert validate_check_pattern(r"(?:(?:a+)+)b") is not None
+
+
+def test_validate_pattern_rejects_secret_hunting() -> None:
+    """Broad credential-keyword alternations are rejected."""
+    assert validate_check_pattern(r"password|token|api_key") is not None
+    assert validate_check_pattern(r"(secret|credential)") is not None
+
+
+def test_redact_matched_line_masks_credential_values() -> None:
+    """Values assigned to credential-like keys are masked."""
+    assert _redact_matched_line("api_key: changeme") == "api_key: <redacted>"
+    assert _redact_matched_line("  my_password: changeme") == "my_password: <redacted>"
+    assert _redact_matched_line("token=changeme") == "token=<redacted>"
+
+
+def test_redact_matched_line_masks_quoted_keys() -> None:
+    """Quoted YAML/JSON credential keys are also redacted."""
+    assert _redact_matched_line('"password": "changeme"') == '"password": <redacted>'
+    assert _redact_matched_line("'api_key': 'changeme'") == "'api_key': <redacted>"
+
+
+def test_redact_matched_line_keeps_secret_references() -> None:
+    """!secret references are indirections, not values — left visible."""
+    assert _redact_matched_line("api_key: !secret my_api_key") == "api_key: !secret my_api_key"
+
+
+def test_redact_matched_line_leaves_ordinary_lines() -> None:
+    """Lines without credential keys are unchanged (beyond trim/truncate)."""
+    assert _redact_matched_line("  device_class: window  ") == "device_class: window"
+
+
+def test_is_sensitive_file() -> None:
+    """The exclusion guard covers .storage, secrets variants, but not config files."""
+    from pathlib import Path
+
+    from custom_components.upgrade_advisor.checker import _is_sensitive_file
+
+    assert _is_sensitive_file(Path("/config/.storage/lovelace.dashboard"))
+    assert _is_sensitive_file(Path("/config/.storage/anything"))
+    assert _is_sensitive_file(Path("/config/secrets.yaml"))
+    assert _is_sensitive_file(Path("/config/prod_secrets.yaml"))
+    assert _is_sensitive_file(Path("/config/packages/homeassistant_secrets.yml"))
+    assert not _is_sensitive_file(Path("/config/configuration.yaml"))
+    assert not _is_sensitive_file(Path("/config/automations.yaml"))
+
+
+async def test_check_grep_config_skips_secrets_and_storage(hass: HomeAssistant, tmp_path) -> None:
+    """secrets.yaml and .storage are never searched."""
+    (tmp_path / "configuration.yaml").write_text("ok_line: value\n")
+    (tmp_path / "secrets.yaml").write_text("ok_line_wifi_password: changeme\n")
+    storage = tmp_path / ".storage"
+    storage.mkdir()
+    (storage / "lovelace.dashboard").write_text('{"ok_line": true}\n')
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(check="grep_config", title="Skip sensitive", pattern="ok_line")
+    result = await _check_grep_config(hass, task)
+
+    assert result.passed is False
+    assert "configuration.yaml" in result.detail
+    assert "secrets.yaml" not in result.detail
+    assert ".storage" not in result.detail
+    assert "1 bug-shaped location" in result.detail
+
+
+async def test_check_grep_config_rejects_unsafe_pattern(hass: HomeAssistant, tmp_path) -> None:
+    """A secret-hunting pattern is rejected and the check skipped."""
+    (tmp_path / "configuration.yaml").write_text("password: changeme\n")
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(check="grep_config", title="Evil", pattern="password|token|api_key")
+    result = await _check_grep_config(hass, task)
+
+    assert result.passed is True
+    assert "unsafe search pattern rejected" in result.detail
+    assert "changeme" not in result.detail
+
+
+async def test_check_grep_config_rejects_invalid_pattern_gracefully(hass: HomeAssistant, tmp_path) -> None:
+    """An uncompilable pattern skips the check instead of raising."""
+    (tmp_path / "configuration.yaml").write_text("key: value\n")
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(check="grep_config", title="Broken", pattern="[unclosed")
+    result = await _check_grep_config(hass, task)
+
+    assert result.passed is True
+    assert "unsafe search pattern rejected" in result.detail
+
+
+async def test_check_grep_config_redacts_matched_secrets(hass: HomeAssistant, tmp_path) -> None:
+    """Credential values on matched lines are redacted in the report."""
+    (tmp_path / "configuration.yaml").write_text("api_key: example_value\n")
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(check="grep_config", title="Deprecated api_key", pattern="api_key:")
+    result = await _check_grep_config(hass, task)
+
+    assert result.passed is False
+    assert "example_value" not in result.detail
+    assert "<redacted>" in result.detail
+
+
+async def test_check_grep_config_timeout_skips_gracefully(hass: HomeAssistant, tmp_path) -> None:
+    """A pattern that blows the regex execution timeout skips the check."""
+    (tmp_path / "configuration.yaml").write_text("key: value\n")
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(check="grep_config", title="Slow", pattern="key:")
+    with patch("custom_components.upgrade_advisor.checker._grep_files_sync", side_effect=TimeoutError):
+        result = await _check_grep_config(hass, task)
+
+    assert result.passed is True
+    assert "timed out" in result.detail
+
+
+async def test_check_automation_references_rejects_unsafe_pattern(hass: HomeAssistant, tmp_path) -> None:
+    """automation_references applies the same pattern validation."""
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(check="automation_references", title="Evil", pattern="(a+)+b")
+    result = await _check_automation_references(hass, task)
+
+    assert result.passed is True
+    assert "unsafe search pattern rejected" in result.detail
 
 
 async def test_check_unavailable_entities_global(hass: HomeAssistant) -> None:

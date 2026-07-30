@@ -10,7 +10,7 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 ## Features
 
 - **Two-phase analysis** — AI identifies potential issues, then the integration verifies them automatically
-- Searches your YAML config and Lovelace dashboards for deprecated options
+- Searches your YAML config for deprecated options (secrets files and `.storage` are never read)
 - Checks entity availability and automation references
 - Analyzes HA core and HACS component updates
 - Uses any HA conversation agent (OpenAI, Google, Anthropic, Ollama, etc. via OpenRouter)
@@ -86,7 +86,7 @@ The integration executes each check against your actual HA instance:
 
 | Check | What it does |
 |-------|-------------|
-| `grep_config` | Searches YAML and Lovelace JSON for deprecated config keys |
+| `grep_config` | Searches YAML config files for deprecated config keys |
 | `entity_available` | Verifies entities for an integration are not unavailable |
 | `automation_references` | Finds automations using deprecated services or entities |
 | `integration_installed` | Confirms whether an affected integration is present |
@@ -107,6 +107,16 @@ The check results (with evidence) are sent back to the AI to produce a concise, 
 ## Action Required
 No action required — safe to upgrade.
 ```
+
+## Security
+
+Release notes are third-party text and are treated as untrusted input end to end:
+
+- **Secrets are never read.** `grep_config` and `automation_references` skip `secrets*.yaml` and the entire `.storage` tree. Only YAML config files are searched.
+- **AI-supplied patterns are validated.** Search regexes from the planning phase are rejected if they exceed 200 characters, contain nested quantifiers (catastrophic-backtracking / ReDoS shapes), or combine multiple credential keywords (e.g. `password|token|api_key`). A rejected pattern skips the check — it never runs.
+- **Hard execution timeout.** Every pattern search runs through the [`regex`](https://pypi.org/project/regex/) package with a 0.25 s timeout, so a catastrophic-backtracking pattern that slips past the static heuristic aborts the check instead of hanging the executor.
+- **Matched lines are redacted.** Before any matched line is included in a report or sent to your AI agent, values assigned to credential-like keys (`password:`, `token:`, `api_key:`, etc.) are replaced with `<redacted>`, and lines are truncated. `!secret` references stay visible since they contain no secret material.
+- **Bounded execution.** Lines are capped at 1000 characters before matching and results are capped at 50 matches per check.
 
 ## Entities
 
