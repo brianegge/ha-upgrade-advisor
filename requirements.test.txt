@@ -1,3 +1,3 @@
-pytest-homeassistant-custom-component>=0.13.346
+pytest-homeassistant-custom-component>=0.13.348
 hassil>=3.10.0
 home-assistant-intents>=2026.6.24
