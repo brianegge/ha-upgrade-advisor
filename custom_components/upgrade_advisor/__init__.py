@@ -657,7 +657,11 @@ class UpgradeAdvisorCoordinator:
         else:
             status, regressions = parse_post_upgrade_response(response_text)
 
-        self.post_upgrade_report = sanitize_report(response_text)
+        # Sanitize once, then use the sanitized text at every output boundary
+        # below — the event payload is published just like the attribute.
+        response_text = sanitize_report(response_text)
+
+        self.post_upgrade_report = response_text
         self.post_upgrade_status = status
         self.post_upgrade_regressions = regressions
         self.last_post_upgrade_check = datetime.now(tz=UTC).isoformat()

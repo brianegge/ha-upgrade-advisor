@@ -467,6 +467,12 @@ def test_redact_matched_line_leaves_ordinary_lines() -> None:
         "- password: hunter2",
         'client_secret: "s3cr3t"',
         "webhook_id: aVeryLongOpaqueIdentifier123456",
+        # Non-credential keys whose values are still secret-shaped: a value
+        # mixing letters and digits, base64, or long hex is indistinguishable
+        # from a credential, so it is masked regardless of the key name.
+        "client: hunter2",
+        "mqtt: cGFzc3dvcmQ",
+        "value: deadbeefcafe",
     ],
 )
 def test_redact_matched_line_masks_non_keyword_secrets(line: str) -> None:
@@ -498,6 +504,26 @@ def test_redact_matched_line_masks_non_keyword_secrets(line: str) -> None:
 def test_redact_matched_line_keeps_benign_evidence(line: str) -> None:
     """Benign config shapes stay readable — the report quotes them as evidence."""
     assert _redact_matched_line(line) == line.strip()
+
+
+def test_redact_matched_line_scrubs_flow_style_yaml() -> None:
+    """A line that isn't a plain assignment must not fall through unmasked."""
+    redacted = _redact_matched_line("{token: abc123xyz, platform: mqtt}")
+    assert "abc123xyz" not in redacted
+    assert "<redacted>" in redacted
+    # The benign pair in the same line is still readable.
+    assert "platform: mqtt" in redacted
+
+
+def test_redact_matched_line_scrubs_quoted_key_with_space() -> None:
+    """Quoted keys containing spaces don't parse as assignments — still masked."""
+    redacted = _redact_matched_line('"my key": s3cr3tvalue')
+    assert "s3cr3tvalue" not in redacted
+
+
+def test_redact_matched_line_keeps_non_assignment_text() -> None:
+    """Lines with no assignment at all are plain text and stay readable."""
+    assert _redact_matched_line("  - some_list_item") == "- some_list_item"
 
 
 @pytest.mark.parametrize("pattern", [".", ".*", "^.*$", r"\S+", r"[\s\S]*"])

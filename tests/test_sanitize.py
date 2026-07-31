@@ -26,11 +26,36 @@ from custom_components.upgrade_advisor.sanitize import (
         ("javascript:alert(1)", False),
         ("data:text/html;base64,PHNjcmlwdD4=", False),
         ("", False),
+        # Parser differential: urlparse reads the host as github.com, but a
+        # browser treats the backslash as a path separator and resolves
+        # attacker.example. Refuse rather than try to out-parse the browser.
+        ("https://attacker.example\\@github.com/", False),
+        ("https://github.com@attacker.example/", False),
+        ("https://github.com\t.attacker.example/", False),
+        ("https://github.com\n/foo", False),
+        ("https://github.com /foo", False),
     ],
 )
 def test_is_allowed_url(url: str, allowed: bool) -> None:
     """Only http(s) URLs on allowlisted domains are permitted."""
     assert is_allowed_url(url) is allowed
+
+
+def test_sanitize_report_rejects_backslash_host_confusion() -> None:
+    """A backslash-obfuscated link must not survive as a live link."""
+    cleaned = sanitize_report("Read [here](https://attacker.example\\@github.com/x)")
+    assert cleaned == "Read here"
+
+
+def test_sanitize_report_handles_unterminated_link_quickly() -> None:
+    """An unterminated '(' must not trigger superlinear backtracking."""
+    assert sanitize_report("[x](" + "a" * 20000) is not None
+
+
+def test_sanitize_report_keeps_link_with_title() -> None:
+    """Markdown link titles are tolerated when the URL is allowlisted."""
+    report = '[PR](https://github.com/a/b "the pull request")'
+    assert sanitize_report(report) == report
 
 
 # --- sanitize_report ---

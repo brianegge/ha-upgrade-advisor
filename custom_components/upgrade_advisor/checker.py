@@ -213,20 +213,38 @@ _CREDENTIAL_KEY_SUBSTRINGS = (
 _CREDENTIAL_KEY_TOKENS = frozenset({"key", "keys", "psk", "pwd", "auth", "salt", "pin", "otp", "hash", "iv"})
 
 _ASSIGNMENT = re.compile(r"^((?:-\s+)?[\"']?[\w.-]+[\"']?\s*[:=]\s*)(\S.*)$")
+# A key with no value (`device_class:`) — often the bug shape itself.
+_BARE_KEY = re.compile(r"^(?:-\s+)?[\"']?[\w.-]+[\"']?\s*[:=]\s*$")
+# `key: value` pairs inside a line that is not a plain assignment, e.g. the
+# flow-style `{token: abc, url: xyz}`.
+_INLINE_ASSIGNMENT = re.compile(r"([\w.-]+[\"']?\s*[:=]\s*)([^,}\]\s]+)")
 
-# A value is emitted verbatim only when it is recognizably harmless. This is
-# a default-deny list: the report needs the config *shape* to classify a bug,
-# never the value, so anything unrecognized (quoted blobs, base64, hex, API
-# keys) is masked regardless of what the key is called.
-_BENIGN_VALUE = re.compile(
-    r"""(?ix)^(?:
-        true|false|null|none|yes|on|off      # YAML keywords
-      | -?\d+(?:\.\d+)?\s*\w{0,3}            # numbers, optionally with a unit
-      | !secret\s+[\w.-]+                    # indirection, not a value
-      | \{\{.*\}\}                           # template
-      | [a-z][\w.-]{0,31}                    # short lowercase identifier
-    )$"""
-)
+# A value is emitted verbatim only when it is recognizably harmless. These are
+# deliberately narrow: the report needs the config *shape* to classify a bug,
+# never the value, so anything unrecognized is masked regardless of the key.
+_YAML_KEYWORDS = frozenset({"true", "false", "null", "none", "yes", "no", "on", "off"})
+_NUMBER_OR_VERSION = re.compile(r"^-?\d+(?:\.\d+)*$")
+_TEMPLATE = re.compile(r"^\{\{.*\}\}$")
+_DOTTED_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$")
+# Letters only — a value mixing letters and digits (`hunter2`, `cGFzc3dvcmQ`)
+# is not distinguishable from a credential by shape, so it is masked.
+_PLAIN_WORD = re.compile(r"^[a-z][a-z_-]{0,19}$")
+_HEXISH = re.compile(r"^[0-9a-f]{8,}$")
+
+
+def _is_benign_value(value: str) -> bool:
+    """True only for values that cannot plausibly be a credential."""
+    value = value.strip().strip("\"'").strip()
+    if not value:
+        return True
+    if value.lower() in _YAML_KEYWORDS:
+        return True
+    if _NUMBER_OR_VERSION.match(value) or _TEMPLATE.match(value):
+        return True
+    if _DOTTED_IDENTIFIER.match(value):
+        return True
+    return bool(_PLAIN_WORD.match(value)) and not _HEXISH.match(value)
+
 
 # A pattern with no literal run of 3+ characters (`.`, `.*`, `^.*$`, `\S+`)
 # matches everything, which turns a check into a wholesale config dump.
@@ -285,17 +303,33 @@ def _redact_matched_line(line: str) -> str:
     line = line.strip()[:_MAX_MATCH_DISPLAY_LENGTH]
     match = _ASSIGNMENT.match(line)
     if match is None:
+        # A bare key carries no value, and is often the bug shape itself.
+        if _BARE_KEY.match(line):
+            return line
+        # An unrecognized shape must not fall through unmasked — scrub every
+        # `key: value` pair we can find inside it (flow-style YAML, quoted
+        # keys with spaces) rather than trusting the line wholesale.
+        if ":" in line or "=" in line:
+            return _INLINE_ASSIGNMENT.sub(_redact_inline_pair, line)
         return line
 
     prefix, value = match.group(1), match.group(2).strip()
     # A `!secret` reference names a secret but does not contain one.
     if value.lower().startswith("!secret"):
         return line
-    if _is_credential_key(prefix):
+    if _is_credential_key(prefix) or not _is_benign_value(value):
         return f"{prefix}<redacted>"
-    if _BENIGN_VALUE.match(value.strip("\"'").strip()):
-        return line
-    return f"{prefix}<redacted>"
+    return line
+
+
+def _redact_inline_pair(match: re.Match[str]) -> str:
+    """Mask one `key: value` pair found inside an unparsed line."""
+    prefix, value = match.group(1), match.group(2)
+    if value.lower().startswith("!secret"):
+        return match.group(0)
+    if _is_credential_key(prefix) or not _is_benign_value(value):
+        return f"{prefix}<redacted>"
+    return match.group(0)
 
 
 def _is_sensitive_file(path: Path) -> bool:

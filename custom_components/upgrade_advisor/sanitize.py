@@ -22,15 +22,29 @@ from urllib.parse import urlparse
 ALLOWED_LINK_DOMAINS = ("github.com", "home-assistant.io")
 
 _MARKDOWN_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
-_MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\(\s*([^)\s]*)[^)]*\)")
+# Single capture for the whole target; the URL is split out in code. Two
+# adjacent quantifiers here would backtrack superlinearly on an unterminated
+# "(" in model-authored text.
+_MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
 _HTML_TAG = re.compile(r"</?[a-zA-Z][^>]*>")
 _BARE_URL = re.compile(r"(?<![(\w])\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>()\[\]]+")
+
+# Characters that browsers and urlparse disagree about. A backslash is a path
+# separator per WHATWG but part of the authority to urlparse, so
+# `https://attacker.example\@github.com/` looks allowlisted here while a
+# browser resolves attacker.example. Refuse rather than try to out-parse them.
+_URL_PARSER_HAZARDS = frozenset("\\\t\r\n <>\"'")
 
 
 def is_allowed_url(url: str) -> bool:
     """True if the URL is http(s) on an allowlisted domain."""
+    candidate = url.strip()
+    if not candidate or any(char in _URL_PARSER_HAZARDS for char in candidate):
+        return False
+    if any(ord(char) < 0x21 or ord(char) > 0x7E for char in candidate):
+        return False
     try:
-        parsed = urlparse(url.strip())
+        parsed = urlparse(candidate)
     except ValueError:
         return False
     if parsed.scheme not in ("http", "https"):
@@ -48,7 +62,9 @@ def _filter_links(text: str, *, keep_allowed: bool) -> str:
     """Reduce markdown links to plain text unless the target is allowlisted."""
 
     def replace(match: re.Match[str]) -> str:
-        label, url = match.group(1), match.group(2)
+        label, target = match.group(1), match.group(2)
+        # A markdown target may carry a title: [text](url "title").
+        url = target.split()[0] if target.split() else ""
         if keep_allowed and is_allowed_url(url):
             return match.group(0)
         return label

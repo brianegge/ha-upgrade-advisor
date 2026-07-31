@@ -175,14 +175,29 @@ async def test_post_upgrade_report_is_sanitized_before_storage(hass: HomeAssista
     }
     mock_converse.return_value = injected
 
-    with patch.object(coordinator.pending_store, "async_save", new=AsyncMock()):
-        await coordinator.async_run_post_upgrade_checks()
+    event_entity = hass.data[DOMAIN][entry.entry_id].get("event_entity")
+    fired: list[dict] = []
+    if event_entity is not None:
+        with (
+            patch.object(coordinator.pending_store, "async_save", new=AsyncMock()),
+            patch.object(event_entity, "fire_post_upgrade_event", side_effect=fired.append),
+        ):
+            await coordinator.async_run_post_upgrade_checks()
+    else:
+        with patch.object(coordinator.pending_store, "async_save", new=AsyncMock()):
+            await coordinator.async_run_post_upgrade_checks()
 
     report = coordinator.post_upgrade_report
     assert report is not None
     assert "attacker.example" not in report
     assert "<img" not in report
     assert "Post-upgrade report" in report
+
+    # The event payload is an output boundary too — it must carry the same
+    # sanitized text, not the raw model response.
+    for payload in fired:
+        assert "attacker.example" not in payload["report"]
+        assert "<img" not in payload["report"]
 
 
 async def test_post_upgrade_skips_when_installed_doesnt_match(hass: HomeAssistant) -> None:
