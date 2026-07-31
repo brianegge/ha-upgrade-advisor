@@ -60,6 +60,7 @@ from .const import (
 )
 from .github import async_get_ha_release_notes_range, async_get_hacs_release_notes
 from .pending_store import PendingAnalysis, PendingStore
+from .sanitize import sanitize_report
 from .services import async_register_services, async_unregister_services
 from .summarize import build_installation_context
 
@@ -398,6 +399,12 @@ class UpgradeAdvisorCoordinator:
             hacs_components=hacs_components,
         )
 
+        # The report is LLM-authored from untrusted release notes, and it is
+        # published as a state attribute and rendered as markdown. Strip any
+        # markup it was steered to emit before it goes anywhere. The release
+        # link is added afterwards so our own trusted link survives.
+        result.report = sanitize_report(result.report)
+
         # Link the heading to the full release notes
         if not result.error:
             update_state = self.hass.states.get(entity_id) if entity_id else None
@@ -649,6 +656,10 @@ class UpgradeAdvisorCoordinator:
             )
         else:
             status, regressions = parse_post_upgrade_response(response_text)
+
+        # Sanitize once, then use the sanitized text at every output boundary
+        # below — the event payload is published just like the attribute.
+        response_text = sanitize_report(response_text)
 
         self.post_upgrade_report = response_text
         self.post_upgrade_status = status
