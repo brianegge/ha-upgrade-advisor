@@ -456,6 +456,78 @@ def test_redact_matched_line_leaves_ordinary_lines() -> None:
     assert _redact_matched_line("  device_class: window  ") == "device_class: window"
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        'encryption_key: "abc123=="',
+        'noise_psk: "deadbeef"',
+        "passphrase: hunter2",
+        "key: sk-live-XYZ",
+        "auth: Basic QWxhZGRpbg==",
+        "- password: hunter2",
+        'client_secret: "s3cr3t"',
+        "webhook_id: aVeryLongOpaqueIdentifier123456",
+    ],
+)
+def test_redact_matched_line_masks_non_keyword_secrets(line: str) -> None:
+    """Secrets whose key names fall outside the credential list are still masked.
+
+    A key-name denylist can never cover every integration's wording, so
+    redaction is default-deny by value shape as well.
+    """
+    redacted = _redact_matched_line(line)
+    assert "<redacted>" in redacted
+    value = line.split(":", 1)[1] if ":" in line else line
+    assert value.strip().strip("\"'") not in redacted
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "device_class: window",
+        "platform: template",
+        "- platform: mqtt",
+        "device_class:",
+        "api_key: !secret my_api_key",
+        'value_template: "{{ states(1) }}"',
+        "port: 8123",
+        "author: frenck",
+        "enabled: true",
+    ],
+)
+def test_redact_matched_line_keeps_benign_evidence(line: str) -> None:
+    """Benign config shapes stay readable — the report quotes them as evidence."""
+    assert _redact_matched_line(line) == line.strip()
+
+
+@pytest.mark.parametrize("pattern", [".", ".*", "^.*$", r"\S+", r"[\s\S]*"])
+def test_validate_pattern_rejects_overly_broad(pattern: str) -> None:
+    """Patterns with no literal text would harvest the config wholesale."""
+    reason = validate_check_pattern(pattern)
+    assert reason is not None
+    assert "too broad" in reason
+
+
+@pytest.mark.parametrize("pattern", ["device_class:", r"platform:\s*template", "ok_line", "key:"])
+def test_validate_pattern_allows_real_bug_shapes(pattern: str) -> None:
+    """Patterns anchored on a real config key are still accepted."""
+    assert validate_check_pattern(pattern) is None
+
+
+def test_parse_check_tasks_strips_markup_from_model_text() -> None:
+    """Task text is echoed into the phase-3 prompt, so markup is flattened."""
+    raw = (
+        '[{"check": "grep_config", "title": "Check [x](https://attacker.example/a)",'
+        ' "context": "![](https://attacker.example/i)",'
+        ' "if_found": "Visit https://attacker.example/x", "pattern": "foo_bar"}]'
+    )
+    tasks = parse_check_tasks(raw)
+    assert len(tasks) == 1
+    assert tasks[0].title == "Check x"
+    assert "attacker.example" not in tasks[0].context
+    assert "`https://attacker.example/x`" in tasks[0].if_found
+
+
 def test_is_sensitive_file() -> None:
     """The exclusion guard covers .storage, secrets variants, but not config files."""
     from pathlib import Path
@@ -467,6 +539,11 @@ def test_is_sensitive_file() -> None:
     assert _is_sensitive_file(Path("/config/secrets.yaml"))
     assert _is_sensitive_file(Path("/config/prod_secrets.yaml"))
     assert _is_sensitive_file(Path("/config/packages/homeassistant_secrets.yml"))
+    assert _is_sensitive_file(Path("/config/credentials.yaml"))
+    assert _is_sensitive_file(Path("/config/tokens.yaml"))
+    assert _is_sensitive_file(Path("/config/passwords.yaml"))
+    assert _is_sensitive_file(Path("/config/api_keys.yaml"))
+    assert _is_sensitive_file(Path("/config/known_devices.yaml"))
     assert not _is_sensitive_file(Path("/config/configuration.yaml"))
     assert not _is_sensitive_file(Path("/config/automations.yaml"))
 

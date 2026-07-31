@@ -12,6 +12,8 @@ import regex
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from .sanitize import strip_markup
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -90,14 +92,17 @@ def parse_check_tasks(raw_json: str) -> list[CheckTask]:
     for i, item in enumerate(items):
         if not isinstance(item, dict):
             continue
+        # These strings are model-authored and get echoed back into the
+        # phase-3 prompt, so an injected instruction would ride along with
+        # the check results. Flatten any markup before storing them.
         tasks.append(
             CheckTask(
                 check=item.get("check", "unknown"),
-                title=item.get("title", f"Check {i + 1}"),
+                title=strip_markup(item.get("title", f"Check {i + 1}")),
                 severity=item.get("severity", "info"),
-                context=item.get("context", ""),
-                if_found=item.get("if_found", ""),
-                if_not_found=item.get("if_not_found", ""),
+                context=strip_markup(item.get("context", "")),
+                if_found=strip_markup(item.get("if_found", "")),
+                if_not_found=strip_markup(item.get("if_not_found", "")),
                 pattern=item.get("pattern", ""),
                 unaffected_shape=item.get("unaffected_shape", ""),
                 files=item.get("files", "*.yaml"),
@@ -169,6 +174,9 @@ _REGEX_TIMEOUT_SECONDS = 0.25
 # classic catastrophic-backtracking shape (e.g. `(a+)+` or `(a{2,})+`).
 _NESTED_QUANTIFIER = re.compile(r"\([^)]*[*+{][^)]*\)\s*[*+{]")
 
+# Narrow list, used to REJECT search patterns. Kept tight on purpose:
+# over-rejecting here would block legitimate deprecation checks, since a
+# lone `api_key:` search is a reasonable thing for a release note to want.
 _SECRET_KEYWORDS = (
     "password",
     "passwd",
@@ -182,12 +190,56 @@ _SECRET_KEYWORDS = (
     "private_key",
 )
 
-# `key: value` or `key=value` where the key names a credential, with the key
-# optionally quoted ('password': / "password":). The value is redacted before
-# the line leaves this module; `!secret name` references are indirections,
-# not values, and stay visible.
-_SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)([\"']?\w*(?:" + "|".join(_SECRET_KEYWORDS) + r")\w*[\"']?\s*[:=]\s*)(?!!secret\b)(\S.*)"
+# Broad lists, used only to REDACT values. Aggressive is correct here:
+# masking one extra value costs nothing, missing one leaks a credential.
+# Long names are matched anywhere in the key; short ones only as whole
+# tokens, so `auth` does not fire on `author`.
+_CREDENTIAL_KEY_SUBSTRINGS = (
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "credential",
+    "token",
+    "apikey",
+    "api_key",
+    "private_key",
+    "bearer",
+    "signature",
+    "session",
+    "cookie",
+    "webhook",
+)
+_CREDENTIAL_KEY_TOKENS = frozenset({"key", "keys", "psk", "pwd", "auth", "salt", "pin", "otp", "hash", "iv"})
+
+_ASSIGNMENT = re.compile(r"^((?:-\s+)?[\"']?[\w.-]+[\"']?\s*[:=]\s*)(\S.*)$")
+
+# A value is emitted verbatim only when it is recognizably harmless. This is
+# a default-deny list: the report needs the config *shape* to classify a bug,
+# never the value, so anything unrecognized (quoted blobs, base64, hex, API
+# keys) is masked regardless of what the key is called.
+_BENIGN_VALUE = re.compile(
+    r"""(?ix)^(?:
+        true|false|null|none|yes|on|off      # YAML keywords
+      | -?\d+(?:\.\d+)?\s*\w{0,3}            # numbers, optionally with a unit
+      | !secret\s+[\w.-]+                    # indirection, not a value
+      | \{\{.*\}\}                           # template
+      | [a-z][\w.-]{0,31}                    # short lowercase identifier
+    )$"""
+)
+
+# A pattern with no literal run of 3+ characters (`.`, `.*`, `^.*$`, `\S+`)
+# matches everything, which turns a check into a wholesale config dump.
+_LITERAL_RUN = re.compile(r"[A-Za-z0-9_]{3,}")
+
+_SENSITIVE_FILENAME_PARTS = (
+    "secret",
+    "credential",
+    "token",
+    "password",
+    "passwd",
+    "known_devices",
+    "key",
 )
 
 
@@ -196,7 +248,8 @@ def validate_check_pattern(pattern: str) -> str | None:
 
     The pattern originates from LLM output steered by third-party release
     notes, so it is untrusted: bound its size, refuse catastrophic-
-    backtracking shapes, and refuse patterns that hunt for credentials.
+    backtracking shapes, refuse patterns that hunt for credentials, and
+    refuse patterns so broad they would harvest the config wholesale.
     """
     if len(pattern) > _MAX_PATTERN_LENGTH:
         return f"pattern exceeds {_MAX_PATTERN_LENGTH} characters"
@@ -209,13 +262,40 @@ def validate_check_pattern(pattern: str) -> str | None:
     lowered = pattern.lower()
     if sum(1 for kw in _SECRET_KEYWORDS if kw in lowered) >= 2:
         return "matches multiple credential keywords — refusing to search for secrets"
+    if not _LITERAL_RUN.search(pattern):
+        return "pattern has no literal text — too broad to be a bug shape"
     return None
 
 
+def _is_credential_key(key: str) -> bool:
+    """True if the assignment key names something credential-like."""
+    lowered = key.lower()
+    if any(part in lowered for part in _CREDENTIAL_KEY_SUBSTRINGS):
+        return True
+    return any(token in _CREDENTIAL_KEY_TOKENS for token in re.split(r"[^a-z0-9]+", lowered))
+
+
 def _redact_matched_line(line: str) -> str:
-    """Redact credential values from a matched line before it is reported."""
+    """Mask the value of a matched config line before it is reported.
+
+    Redaction is default-deny by value shape, not just by key name — a
+    denylist of key names can never cover every integration's wording
+    (`encryption_key`, `noise_psk`, `passphrase`, ...).
+    """
     line = line.strip()[:_MAX_MATCH_DISPLAY_LENGTH]
-    return _SENSITIVE_ASSIGNMENT.sub(r"\1<redacted>", line)
+    match = _ASSIGNMENT.match(line)
+    if match is None:
+        return line
+
+    prefix, value = match.group(1), match.group(2).strip()
+    # A `!secret` reference names a secret but does not contain one.
+    if value.lower().startswith("!secret"):
+        return line
+    if _is_credential_key(prefix):
+        return f"{prefix}<redacted>"
+    if _BENIGN_VALUE.match(value.strip("\"'").strip()):
+        return line
+    return f"{prefix}<redacted>"
 
 
 def _is_sensitive_file(path: Path) -> bool:
@@ -223,7 +303,7 @@ def _is_sensitive_file(path: Path) -> bool:
     if any(part == ".storage" for part in path.parts):
         return True
     name = path.name.lower()
-    return "secret" in name and name.endswith((".yaml", ".yml"))
+    return any(part in name for part in _SENSITIVE_FILENAME_PARTS)
 
 
 def _grep_files_sync(

