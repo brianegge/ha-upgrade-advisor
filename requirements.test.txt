@@ -1,4 +1,4 @@
-pytest-homeassistant-custom-component>=0.13.348
+pytest-homeassistant-custom-component>=0.13.357
 regex>=2024.11.6
 hassil>=3.10.0
 home-assistant-intents>=2026.6.24
