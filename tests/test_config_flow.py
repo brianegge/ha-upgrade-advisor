@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
@@ -67,7 +67,7 @@ async def test_user_flow_already_configured(
     assert result["reason"] == "already_configured"
 
 
-async def test_options_flow(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -> None:
+async def test_options_flow(hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_conversation_agent) -> None:
     """Test the options flow saves preferences."""
     result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
@@ -76,6 +76,7 @@ async def test_options_flow(hass: HomeAssistant, mock_config_entry: MockConfigEn
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         user_input={
+            CONF_AGENT_ID: MOCK_AGENT_ID,
             "scan_on_update_available": False,
             "scan_hacs_updates": True,
             "create_repair_issues": False,
@@ -85,6 +86,61 @@ async def test_options_flow(hass: HomeAssistant, mock_config_entry: MockConfigEn
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_AGENT_ID] == MOCK_AGENT_ID
     assert result["data"]["scan_on_update_available"] is False
     assert result["data"]["create_repair_issues"] is False
     assert result["data"]["include_addons"] is False
+
+
+async def test_options_flow_change_agent(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_conversation_agent
+) -> None:
+    """Test the options flow can switch to a different conversation agent."""
+    new_agent_id = "conversation.other_agent"
+    new_agent_info = MagicMock()
+    new_agent_info.name = "Other Agent"
+    new_agent_info.id = new_agent_id
+    mock_conversation_agent.return_value = new_agent_info
+
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_AGENT_ID: new_agent_id,
+            "scan_on_update_available": True,
+            "scan_hacs_updates": True,
+            "create_repair_issues": True,
+            "include_automations": True,
+            "include_addons": True,
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_AGENT_ID] == new_agent_id
+    assert mock_config_entry.options[CONF_AGENT_ID] == new_agent_id
+    # The entry title follows the selected agent
+    assert mock_config_entry.title == "Other Agent"
+
+
+async def test_options_flow_agent_not_found(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_conversation_agent
+) -> None:
+    """Test the options flow shows an error when the agent disappears before submit."""
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
+
+    mock_conversation_agent.return_value = None
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_AGENT_ID: MOCK_AGENT_ID,
+            "scan_on_update_available": True,
+            "scan_hacs_updates": True,
+            "create_repair_issues": True,
+            "include_automations": True,
+            "include_addons": True,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "agent_not_found"}

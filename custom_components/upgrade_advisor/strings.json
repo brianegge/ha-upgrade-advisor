@@ -24,6 +24,7 @@
       "init": {
         "title": "Upgrade Advisor Options",
         "data": {
+          "agent_id": "Conversation agent",
           "scan_on_update_available": "Analyze automatically when updates are available",
           "scan_hacs_updates": "Analyze HACS component updates",
           "post_upgrade_check": "Verify upgrades after they land (re-run checks post-upgrade)",
@@ -31,8 +32,14 @@
           "include_automations": "Include automations in analysis context",
           "include_addons": "Include add-ons in analysis context",
           "dashboard_path": "Dashboard URL path (e.g., upgrade-advisor)"
+        },
+        "data_description": {
+          "agent_id": "The AI agent that will analyze release notes against your configuration"
         }
       }
+    },
+    "error": {
+      "agent_not_found": "The selected conversation agent was not found"
     }
   },
   "entity": {
