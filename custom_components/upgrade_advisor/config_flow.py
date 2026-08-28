@@ -7,6 +7,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.selector import SelectOptionDict, SelectSelector, SelectSelectorConfig
 
 from .const import (
@@ -27,6 +28,27 @@ from .const import (
     DEFAULT_SCAN_ON_UPDATE,
     DOMAIN,
 )
+
+
+def _build_agent_selector(hass: HomeAssistant) -> SelectSelector:
+    """Build a dropdown selector listing the available conversation agents."""
+    from homeassistant.components.conversation import async_get_agent_info
+
+    agent_options = []
+    for state in hass.states.async_all("conversation"):
+        info = async_get_agent_info(hass, state.entity_id)
+        if info:
+            agent_options.append(SelectOptionDict(value=info.id, label=info.name))
+
+    if not agent_options:
+        agent_options.append(SelectOptionDict(value="homeassistant", label="Home Assistant"))
+
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=agent_options,
+            mode="dropdown",
+        ),
+    )
 
 
 class UpgradeAdvisorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -56,29 +78,11 @@ class UpgradeAdvisorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={CONF_AGENT_ID: agent_id},
                 )
 
-        # Build agent options dynamically
-        from homeassistant.components.conversation import async_get_agent_info
-
-        agent_options = []
-        for state in self.hass.states.async_all("conversation"):
-            agent_id = state.entity_id
-            info = async_get_agent_info(self.hass, agent_id)
-            if info:
-                agent_options.append(SelectOptionDict(value=info.id, label=info.name))
-
-        if not agent_options:
-            agent_options.append(SelectOptionDict(value="homeassistant", label="Home Assistant"))
-
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_AGENT_ID): SelectSelector(
-                        SelectSelectorConfig(
-                            options=agent_options,
-                            mode="dropdown",
-                        ),
-                    ),
+                    vol.Required(CONF_AGENT_ID): _build_agent_selector(self.hass),
                 }
             ),
             errors=errors,
@@ -95,13 +99,33 @@ class UpgradeAdvisorOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            agent_id = user_input[CONF_AGENT_ID]
+
+            # Validate the selected agent exists
+            from homeassistant.components.conversation import async_get_agent_info
+
+            agent_info = async_get_agent_info(self.hass, agent_id)
+            if agent_info is None:
+                errors["base"] = "agent_not_found"
+            else:
+                # Keep the entry title in sync with the selected agent
+                if agent_info.name != self.config_entry.title:
+                    self.hass.config_entries.async_update_entry(self.config_entry, title=agent_info.name)
+                return self.async_create_entry(data=user_input)
+
+        current_agent = self.config_entry.options.get(CONF_AGENT_ID, self.config_entry.data.get(CONF_AGENT_ID))
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Required(
+                        CONF_AGENT_ID,
+                        default=current_agent,
+                    ): _build_agent_selector(self.hass),
                     vol.Required(
                         CONF_SCAN_ON_UPDATE,
                         default=self.config_entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE),
@@ -132,4 +156,5 @@ class UpgradeAdvisorOptionsFlow(config_entries.OptionsFlow):
                     ): str,
                 }
             ),
+            errors=errors,
         )

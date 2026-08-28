@@ -69,6 +69,7 @@ Go to **Settings > Integrations > Upgrade Advisor > Configure**:
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| Conversation agent | (from setup) | The AI agent used for analysis — change it here any time |
 | Analyze on update available | On | Auto-analyze when updates appear |
 | Analyze HACS updates | On | Include HACS component updates |
 | Create repair issues | On | Create repairs for breaking changes |

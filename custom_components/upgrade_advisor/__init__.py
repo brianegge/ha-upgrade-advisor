@@ -116,6 +116,11 @@ class UpgradeAdvisorCoordinator:
         """Get an option value with fallback to default."""
         return self.entry.options.get(key, default)
 
+    @property
+    def agent_id(self) -> str:
+        """The conversation agent to use (options override the initial setup choice)."""
+        return self.entry.options.get(CONF_AGENT_ID, self.entry.data[CONF_AGENT_ID])
+
     async def async_analyze_core_update(self) -> None:
         """Analyze only the HA core update."""
         state = self.hass.states.get(HA_CORE_UPDATE_ENTITY)
@@ -385,7 +390,7 @@ class UpgradeAdvisorCoordinator:
         # Build HACS component list
         hacs_components = self._get_hacs_component_list()
 
-        agent_id = self.entry.data[CONF_AGENT_ID]
+        agent_id = self.agent_id
 
         # Two-phase analysis for all updates
         result = await self._run_two_phase_analysis(
@@ -640,7 +645,7 @@ class UpgradeAdvisorCoordinator:
             check_pairs=pairs_text,
         )
 
-        agent_id = self.entry.data[CONF_AGENT_ID]
+        agent_id = self.agent_id
         try:
             response_text = await async_converse_with_agent(self.hass, agent_id, prompt)
         except Exception:

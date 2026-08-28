@@ -253,3 +253,41 @@ async def test_startup_scan_runs_for_post_upgrade_only(hass: HomeAssistant) -> N
         await hass.async_block_till_done()
 
     mock_call_later.assert_called_once()
+
+
+# --- agent_id resolution ---
+
+
+async def test_agent_id_prefers_options_over_data(hass: HomeAssistant) -> None:
+    """An agent chosen in the options flow overrides the initial setup choice."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Mock AI Agent",
+        data={CONF_AGENT_ID: MOCK_AGENT_ID},
+        options={CONF_AGENT_ID: "conversation.other_agent"},
+        unique_id=DOMAIN,
+    )
+    entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    assert coordinator.agent_id == "conversation.other_agent"
+
+
+async def test_agent_id_falls_back_to_data(hass: HomeAssistant) -> None:
+    """Without an options override, the initial setup agent is used."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Mock AI Agent",
+        data={CONF_AGENT_ID: MOCK_AGENT_ID},
+        unique_id=DOMAIN,
+    )
+    entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    assert coordinator.agent_id == MOCK_AGENT_ID
