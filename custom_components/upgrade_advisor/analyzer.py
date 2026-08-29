@@ -63,7 +63,8 @@ or use `entity_count` with both `integration` and `domain` set.
 
 1. `grep_config` — Search YAML config files for a pattern (secrets files and \
    the .storage tree are never searched)
-   Params: `pattern` (regex), optional `unaffected_shape` (regex)
+   Params: `pattern` (regex), optional `unaffected_shape` (regex), optional \
+   `integration` + `domain` (entity scope, see ENTITY SCOPE RULE below)
    Use for: deprecated config keys, removed options, services that are being changed.
 
    CRITICAL: `pattern` must target the SPECIFIC MALFORMED SHAPE the fix is \
@@ -81,8 +82,24 @@ or use `entity_count` with both `integration` and `domain` set.
    bug", not "lines that use the feature."
 
 2. `automation_references` — Search automation YAML for a pattern
-   Params: `pattern` (regex)
+   Params: `pattern` (regex), optional `integration` + `domain` (entity \
+   scope, see ENTITY SCOPE RULE below)
    Use for: finding automations using deprecated or newly enhanced services/entities
+
+   ENTITY SCOPE RULE (applies to grep_config and automation_references): \
+   when a change renames, removes, or alters ENTITIES of a specific \
+   integration (e.g. entity IDs gaining or losing a `_status` suffix), you \
+   do not know the installation's actual entity IDs — so you MUST set \
+   `integration` to that integration's domain on the check. Matched lines \
+   are then kept only if they reference an entity ID actually registered \
+   to that integration; lookalike entities from other integrations are \
+   discarded automatically. NEVER emit an unscoped generic name-shape \
+   pattern like `_(state|status)` — without the scope it flags unrelated \
+   entities from every other integration. Optionally also set `domain` \
+   (e.g. "sensor", "lock") to narrow the scope further. Do NOT set \
+   `integration` on checks whose pattern targets config keys or service \
+   names rather than entity IDs — the scope would wrongly discard those \
+   matches.
 
 3. `entity_count` — Count entities for an integration
    Params: `integration` (integration domain, e.g. "esphome"), optional `domain`
@@ -109,7 +126,10 @@ JSON array of check objects with these fields:
 - `pattern`: regex (for grep_config, automation_references, service_exists)
 - `unaffected_shape`: optional regex for grep_config — lines matching this are \
   filtered out as benign
-- `integration`: domain name (for entity_count)
+- `integration`: integration domain name (for entity_count; entity scope for \
+  grep_config/automation_references per the ENTITY SCOPE RULE)
+- `domain`: entity domain (optional narrowing for entity_count and \
+  entity-scoped checks)
 - `if_found`: message if matches found
 - `if_not_found`: message if no matches
 

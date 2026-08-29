@@ -345,14 +345,18 @@ def _grep_files_sync(
     glob_patterns: list[str],
     compiled: regex.Pattern,
     disqualifier: regex.Pattern | None,
-) -> tuple[list[str], int, int]:
+    qualifier: regex.Pattern | None = None,
+) -> tuple[list[str], int, int, int]:
     """Walk the config tree and grep matching lines. Runs in an executor.
 
     Skips secrets files and the .storage tree, bounds line length before
     matching, redacts credential values from matched lines, and stops after
     _MAX_MATCHES matches. Each search carries a hard timeout; TimeoutError
-    propagates to the caller. Returns (matches, disqualified_count,
-    files_searched).
+    propagates to the caller. When `qualifier` is set, a line that matches
+    `pattern` is kept only if it also matches `qualifier` — used to scope
+    entity-rename checks to entity IDs that actually belong to the
+    integration being upgraded. Returns (matches, disqualified_count,
+    out_of_scope_count, files_searched).
     """
     search_files: list[Path] = []
     for pattern in glob_patterns:
@@ -367,6 +371,7 @@ def _grep_files_sync(
 
     matches: list[str] = []
     disqualified = 0
+    out_of_scope = 0
     files_searched = 0
     for search_file in unique_files:
         if len(matches) >= _MAX_MATCHES:
@@ -391,8 +396,25 @@ def _grep_files_sync(
             if disqualifier is not None and disqualifier.search(line, timeout=_REGEX_TIMEOUT_SECONDS):
                 disqualified += 1
                 continue
+            if qualifier is not None and not qualifier.search(line, timeout=_REGEX_TIMEOUT_SECONDS):
+                out_of_scope += 1
+                continue
             matches.append(f"{relative}:{line_num}: {_redact_matched_line(line)}")
-    return matches, disqualified, files_searched
+    return matches, disqualified, out_of_scope, files_searched
+
+
+def _build_entity_scope(hass: HomeAssistant, integration: str, domain: str = "") -> regex.Pattern | None:
+    """Compile a regex matching any entity ID registered to `integration`.
+
+    Used to scope entity-targeting pattern checks (e.g. rename suffixes like
+    `_status`) to the integration actually being upgraded, so entities from
+    unrelated integrations that happen to share the naming shape are not
+    flagged. Returns None when the integration has no registered entities.
+    """
+    entity_ids = _get_entity_ids_for_integration(hass, integration, domain=domain)
+    if not entity_ids:
+        return None
+    return regex.compile("|".join(regex.escape(eid) for eid in entity_ids), regex.IGNORECASE)
 
 
 async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResult:
@@ -433,13 +455,29 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
                 shape_rejection,
             )
 
+    qualifier: regex.Pattern | None = None
+    if task.integration:
+        qualifier = _build_entity_scope(hass, task.integration, task.domain)
+        if qualifier is None:
+            return CheckResult(
+                check_id="grep_config",
+                title=task.title,
+                passed=True,
+                detail=(
+                    f"No entities registered to '{task.integration}'"
+                    f"{f' in domain {task.domain}' if task.domain else ''} — nothing to check."
+                ),
+                severity=task.severity,
+            )
+
     try:
-        matches, disqualified, files_searched = await hass.async_add_executor_job(
+        matches, disqualified, out_of_scope, files_searched = await hass.async_add_executor_job(
             _grep_files_sync,
             config_dir,
             ["*.yaml", "packages/**/*.yaml", "integrations/**/*.yaml", "mqtt/**/*.yaml"],
             compiled,
             disqualifier,
+            qualifier,
         )
     except TimeoutError:
         _LOGGER.warning("Grep pattern for '%s' timed out: %s", task.title, pattern)
@@ -454,6 +492,11 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
     disqualified_note = (
         f" ({disqualified} well-formed occurrence(s) filtered out by unaffected_shape)" if disqualified else ""
     )
+    scope_note = (
+        f" ({out_of_scope} match(es) not referencing any '{task.integration}' entity discarded as unrelated)"
+        if out_of_scope
+        else ""
+    )
 
     if matches:
         match_text = "\n".join(f"  - {m}" for m in matches[:10])
@@ -464,7 +507,7 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
             passed=False,
             detail=(
                 f"Found '{pattern}' in {len(matches)} bug-shaped location(s) "
-                f"across {files_searched} files{disqualified_note}:\n{match_text}{extra}"
+                f"across {files_searched} files{disqualified_note}{scope_note}:\n{match_text}{extra}"
                 f"\n\n{task.if_found}"
             ),
             severity=task.severity,
@@ -476,7 +519,7 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
         passed=True,
         detail=(
             f"Searched {files_searched} YAML files — no bug-shaped matches for "
-            f"'{pattern}'{disqualified_note}.\n\n{task.if_not_found}"
+            f"'{pattern}'{disqualified_note}{scope_note}.\n\n{task.if_not_found}"
         ),
         severity=task.severity,
     )
@@ -597,13 +640,29 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
     config_dir = Path(hass.config.path())
     compiled = regex.compile(pattern, regex.IGNORECASE)
 
+    qualifier: regex.Pattern | None = None
+    if task.integration:
+        qualifier = _build_entity_scope(hass, task.integration, task.domain)
+        if qualifier is None:
+            return CheckResult(
+                check_id="automation_references",
+                title=task.title,
+                passed=True,
+                detail=(
+                    f"No entities registered to '{task.integration}'"
+                    f"{f' in domain {task.domain}' if task.domain else ''} — nothing to check."
+                ),
+                severity=task.severity,
+            )
+
     try:
-        matches, _disqualified, _files_searched = await hass.async_add_executor_job(
+        matches, _disqualified, out_of_scope, _files_searched = await hass.async_add_executor_job(
             _grep_files_sync,
             config_dir,
             ["automations.yaml", "automations/*.yaml", "packages/**/*.yaml"],
             compiled,
             None,
+            qualifier,
         )
 
         # Also check automation entity states for friendly names matching pattern
@@ -614,6 +673,12 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
             if compiled.search(friendly, timeout=_REGEX_TIMEOUT_SECONDS) or compiled.search(
                 state.entity_id, timeout=_REGEX_TIMEOUT_SECONDS
             ):
+                if qualifier is not None and not (
+                    qualifier.search(friendly, timeout=_REGEX_TIMEOUT_SECONDS)
+                    or qualifier.search(state.entity_id, timeout=_REGEX_TIMEOUT_SECONDS)
+                ):
+                    out_of_scope += 1
+                    continue
                 entity_matches.append(friendly or state.entity_id)
     except TimeoutError:
         _LOGGER.warning("Automation pattern for '%s' timed out: %s", task.title, pattern)
@@ -626,6 +691,11 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
         )
 
     all_matches = matches + [f"automation: {m}" for m in entity_matches]
+    scope_note = (
+        f" ({out_of_scope} match(es) not referencing any '{task.integration}' entity discarded as unrelated)"
+        if out_of_scope
+        else ""
+    )
 
     if all_matches:
         match_text = "\n".join(f"  - {m}" for m in all_matches[:10])
@@ -633,7 +703,9 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
             check_id="automation_references",
             title=task.title,
             passed=False,
-            detail=f"Found {len(all_matches)} reference(s) to '{pattern}':\n{match_text}\n\n{task.if_found}",
+            detail=(
+                f"Found {len(all_matches)} reference(s) to '{pattern}'{scope_note}:\n{match_text}\n\n{task.if_found}"
+            ),
             severity=task.severity,
         )
 
@@ -641,7 +713,7 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
         check_id="automation_references",
         title=task.title,
         passed=True,
-        detail=f"No references to '{pattern}' found in automations.\n\n{task.if_not_found}",
+        detail=f"No references to '{pattern}' found in automations{scope_note}.\n\n{task.if_not_found}",
         severity=task.severity,
     )
 
