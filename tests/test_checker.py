@@ -359,6 +359,184 @@ async def test_check_grep_config_no_matches_still_reports_disqualified(hass: Hom
     assert "No bug-shaped definitions found." in result.detail
 
 
+async def test_check_grep_config_entity_scope_filters_unrelated(hass: HomeAssistant, tmp_path) -> None:
+    """With `integration` set, matches not referencing that integration's entities are discarded."""
+    config_file = tmp_path / "configuration.yaml"
+    config_file.write_text(
+        "sensor:\n"
+        "  - platform: template\n"
+        "    sensors:\n"
+        "      rufus:\n"
+        "        value_template: \"{{ states('sensor.rufus_status') }}\"\n"  # unrelated integration
+        "      fuel:\n"
+        "        value_template: \"{{ states('sensor.fordpass_fuel_status') }}\"\n"  # in scope
+    )
+    hass.config.config_dir = str(tmp_path)
+
+    entities = [
+        _make_entity("sensor.fordpass_fuel_status", "fordpass"),
+        _make_entity("sensor.rufus_status", "other_integration"),
+    ]
+    task = CheckTask(
+        check="grep_config",
+        title="FordPass entity rename",
+        pattern=r"_status\b",
+        integration="fordpass",
+        severity="breaking",
+        if_found="These reference renamed FordPass entities.",
+    )
+    with patch("custom_components.upgrade_advisor.checker.er.async_get", return_value=_mock_entity_registry(entities)):
+        result = await _check_grep_config(hass, task)
+
+    assert result.passed is False
+    assert "1 bug-shaped location" in result.detail
+    assert "sensor.fordpass_fuel_status" in result.detail
+    assert "sensor.rufus_status" not in result.detail
+    assert "1 match(es) not referencing any 'fordpass' entity discarded" in result.detail
+
+
+async def test_check_grep_config_entity_scope_all_unrelated_passes(hass: HomeAssistant, tmp_path) -> None:
+    """When every match belongs to other integrations, the scoped check passes."""
+    config_file = tmp_path / "configuration.yaml"
+    config_file.write_text(
+        "rufus: \"{{ states('sensor.rufus_status') }}\"\ncamera_watch: sensor.ai_camera_detector_status\n",
+    )
+    hass.config.config_dir = str(tmp_path)
+
+    entities = [_make_entity("sensor.fordpass_fuel_status", "fordpass")]
+    task = CheckTask(
+        check="grep_config",
+        title="FordPass entity rename",
+        pattern=r"_status\b",
+        integration="fordpass",
+        severity="breaking",
+        if_not_found="No config references FordPass entities being renamed.",
+    )
+    with patch("custom_components.upgrade_advisor.checker.er.async_get", return_value=_mock_entity_registry(entities)):
+        result = await _check_grep_config(hass, task)
+
+    assert result.passed is True
+    assert "2 match(es) not referencing any 'fordpass' entity discarded" in result.detail
+    assert "No config references FordPass entities being renamed." in result.detail
+
+
+async def test_check_grep_config_entity_scope_rejects_prefix_collision(hass: HomeAssistant, tmp_path) -> None:
+    """A registered ID that is a prefix of a longer unrelated ID must not satisfy the scope."""
+    (tmp_path / "configuration.yaml").write_text(
+        "watcher: sensor.fordpass_charge_status\n"  # unrelated template sensor, extends the registered ID
+        "charging: sensor.fordpass_charge\n"  # the real in-scope entity
+    )
+    hass.config.config_dir = str(tmp_path)
+
+    entities = [_make_entity("sensor.fordpass_charge", "fordpass")]
+    task = CheckTask(
+        check="grep_config",
+        title="FordPass entity rename",
+        pattern=r"sensor\.fordpass",
+        integration="fordpass",
+        severity="breaking",
+    )
+    with patch("custom_components.upgrade_advisor.checker.er.async_get", return_value=_mock_entity_registry(entities)):
+        result = await _check_grep_config(hass, task)
+
+    assert result.passed is False
+    assert "1 bug-shaped location" in result.detail
+    assert "charging: sensor.fordpass_charge" in result.detail
+    assert "sensor.fordpass_charge_status" not in result.detail
+    assert "1 match(es) not referencing any 'fordpass' entity discarded" in result.detail
+
+
+async def test_check_grep_config_entity_scope_no_entities(hass: HomeAssistant, tmp_path) -> None:
+    """A scoped check for an integration with no registered entities passes with no search."""
+    (tmp_path / "configuration.yaml").write_text("anything: sensor.foo_status\n")
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(
+        check="grep_config",
+        title="FordPass entity rename",
+        pattern=r"_status\b",
+        integration="fordpass",
+        severity="breaking",
+    )
+    with patch("custom_components.upgrade_advisor.checker.er.async_get", return_value=_mock_entity_registry([])):
+        result = await _check_grep_config(hass, task)
+
+    assert result.passed is True
+    assert "No entities registered to 'fordpass'" in result.detail
+
+
+async def test_check_automation_references_entity_scope(hass: HomeAssistant, tmp_path) -> None:
+    """Automation checks scoped to an integration ignore lookalike entities."""
+    automations_file = tmp_path / "automations.yaml"
+    automations_file.write_text(
+        "- alias: phone battery\n"
+        "  entity_id: sensor.brians_iphone_12_battery_state\n"  # unrelated integration
+        "- alias: car charging\n"
+        "  entity_id: sensor.fordpass_charge_state\n"  # in scope
+    )
+    hass.config.config_dir = str(tmp_path)
+
+    entities = [
+        _make_entity("sensor.fordpass_charge_state", "fordpass"),
+        _make_entity("sensor.brians_iphone_12_battery_state", "mobile_app"),
+    ]
+    task = CheckTask(
+        check="automation_references",
+        title="Automations using renamed FordPass entities",
+        pattern=r"_state\b",
+        integration="fordpass",
+        severity="breaking",
+    )
+    with patch("custom_components.upgrade_advisor.checker.er.async_get", return_value=_mock_entity_registry(entities)):
+        result = await _check_automation_references(hass, task)
+
+    assert result.passed is False
+    assert "sensor.fordpass_charge_state" in result.detail
+    assert "iphone" not in result.detail
+    assert "1 match(es) not referencing any 'fordpass' entity discarded" in result.detail
+
+
+async def test_check_automation_references_entity_scope_skips_friendly_name_pass(hass: HomeAssistant, tmp_path) -> None:
+    """Under an entity scope, automation names matching the pattern are neither reported nor counted."""
+    (tmp_path / "automations.yaml").write_text("- alias: unrelated\n  entity_id: light.porch\n")
+    hass.config.config_dir = str(tmp_path)
+    hass.states.async_set("automation.fuel_status_alert", "on", {"friendly_name": "Fuel status alert"})
+
+    entities = [_make_entity("sensor.fordpass_fuel_status", "fordpass")]
+    task = CheckTask(
+        check="automation_references",
+        title="Automations using renamed FordPass entities",
+        pattern=r"status\b",
+        integration="fordpass",
+        severity="breaking",
+    )
+    with patch("custom_components.upgrade_advisor.checker.er.async_get", return_value=_mock_entity_registry(entities)):
+        result = await _check_automation_references(hass, task)
+
+    assert result.passed is True
+    assert "discarded" not in result.detail  # name-pass hits are skipped, not counted as out of scope
+    assert "Fuel status alert" not in result.detail
+
+
+async def test_check_automation_references_entity_scope_no_entities(hass: HomeAssistant, tmp_path) -> None:
+    """A scoped automation check for an entity-less integration passes with no search."""
+    (tmp_path / "automations.yaml").write_text("- entity_id: sensor.foo_state\n")
+    hass.config.config_dir = str(tmp_path)
+
+    task = CheckTask(
+        check="automation_references",
+        title="Automations using renamed FordPass entities",
+        pattern=r"_state\b",
+        integration="fordpass",
+        severity="breaking",
+    )
+    with patch("custom_components.upgrade_advisor.checker.er.async_get", return_value=_mock_entity_registry([])):
+        result = await _check_automation_references(hass, task)
+
+    assert result.passed is True
+    assert "No entities registered to 'fordpass'" in result.detail
+
+
 async def test_check_entity_count_with_domain_match(hass: HomeAssistant) -> None:
     """entity_count with a domain filter counts only entities in that domain."""
     entities = [
