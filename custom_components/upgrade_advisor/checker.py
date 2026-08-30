@@ -414,7 +414,42 @@ def _build_entity_scope(hass: HomeAssistant, integration: str, domain: str = "")
     entity_ids = _get_entity_ids_for_integration(hass, integration, domain=domain)
     if not entity_ids:
         return None
-    return regex.compile("|".join(regex.escape(eid) for eid in entity_ids), regex.IGNORECASE)
+    # Word-boundary anchors so a registered ID that is a prefix of a longer
+    # unrelated identifier (sensor.fordpass_charge vs an unrelated template
+    # sensor.fordpass_charge_status) does not satisfy the scope.
+    alternation = "|".join(regex.escape(eid) for eid in entity_ids)
+    return regex.compile(rf"\b(?:{alternation})\b", regex.IGNORECASE)
+
+
+def _entity_scope_or_early_pass(
+    hass: HomeAssistant, task: CheckTask, check_id: str
+) -> tuple[regex.Pattern | None, CheckResult | None]:
+    """Resolve the task's entity scope into (qualifier, early_result).
+
+    No scope requested → (None, None). Scope resolves → (qualifier, None).
+    Scoped integration has no registered entities → (None, passing result):
+    nothing it could match exists, so there is nothing to search for.
+    """
+    if not task.integration:
+        return None, None
+    qualifier = _build_entity_scope(hass, task.integration, task.domain)
+    if qualifier is not None:
+        return qualifier, None
+    domain_note = f" in domain {task.domain}" if task.domain else ""
+    return None, CheckResult(
+        check_id=check_id,
+        title=task.title,
+        passed=True,
+        detail=f"No entities registered to '{task.integration}'{domain_note} — nothing to check.",
+        severity=task.severity,
+    )
+
+
+def _format_scope_note(task: CheckTask, out_of_scope: int) -> str:
+    """Describe how many pattern matches the entity scope discarded."""
+    if not out_of_scope:
+        return ""
+    return f" ({out_of_scope} match(es) not referencing any '{task.integration}' entity discarded as unrelated)"
 
 
 async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResult:
@@ -455,20 +490,9 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
                 shape_rejection,
             )
 
-    qualifier: regex.Pattern | None = None
-    if task.integration:
-        qualifier = _build_entity_scope(hass, task.integration, task.domain)
-        if qualifier is None:
-            return CheckResult(
-                check_id="grep_config",
-                title=task.title,
-                passed=True,
-                detail=(
-                    f"No entities registered to '{task.integration}'"
-                    f"{f' in domain {task.domain}' if task.domain else ''} — nothing to check."
-                ),
-                severity=task.severity,
-            )
+    qualifier, early_result = _entity_scope_or_early_pass(hass, task, "grep_config")
+    if early_result is not None:
+        return early_result
 
     try:
         matches, disqualified, out_of_scope, files_searched = await hass.async_add_executor_job(
@@ -492,11 +516,7 @@ async def _check_grep_config(hass: HomeAssistant, task: CheckTask) -> CheckResul
     disqualified_note = (
         f" ({disqualified} well-formed occurrence(s) filtered out by unaffected_shape)" if disqualified else ""
     )
-    scope_note = (
-        f" ({out_of_scope} match(es) not referencing any '{task.integration}' entity discarded as unrelated)"
-        if out_of_scope
-        else ""
-    )
+    scope_note = _format_scope_note(task, out_of_scope)
 
     if matches:
         match_text = "\n".join(f"  - {m}" for m in matches[:10])
@@ -640,20 +660,9 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
     config_dir = Path(hass.config.path())
     compiled = regex.compile(pattern, regex.IGNORECASE)
 
-    qualifier: regex.Pattern | None = None
-    if task.integration:
-        qualifier = _build_entity_scope(hass, task.integration, task.domain)
-        if qualifier is None:
-            return CheckResult(
-                check_id="automation_references",
-                title=task.title,
-                passed=True,
-                detail=(
-                    f"No entities registered to '{task.integration}'"
-                    f"{f' in domain {task.domain}' if task.domain else ''} — nothing to check."
-                ),
-                severity=task.severity,
-            )
+    qualifier, early_result = _entity_scope_or_early_pass(hass, task, "automation_references")
+    if early_result is not None:
+        return early_result
 
     try:
         matches, _disqualified, out_of_scope, _files_searched = await hass.async_add_executor_job(
@@ -665,21 +674,19 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
             qualifier,
         )
 
-        # Also check automation entity states for friendly names matching pattern
-        auto_states = hass.states.async_all("automation")
+        # Also check automation entity states for friendly names matching the
+        # pattern. Skipped when an entity scope is set: an automation's own
+        # name or `automation.*` entity ID can never demonstrate a reference
+        # to another integration's entity, so under a scope every hit here
+        # would just be discarded as out of scope.
         entity_matches: list[str] = []
-        for state in auto_states:
-            friendly = state.attributes.get("friendly_name", "")
-            if compiled.search(friendly, timeout=_REGEX_TIMEOUT_SECONDS) or compiled.search(
-                state.entity_id, timeout=_REGEX_TIMEOUT_SECONDS
-            ):
-                if qualifier is not None and not (
-                    qualifier.search(friendly, timeout=_REGEX_TIMEOUT_SECONDS)
-                    or qualifier.search(state.entity_id, timeout=_REGEX_TIMEOUT_SECONDS)
+        if qualifier is None:
+            for state in hass.states.async_all("automation"):
+                friendly = state.attributes.get("friendly_name", "")
+                if compiled.search(friendly, timeout=_REGEX_TIMEOUT_SECONDS) or compiled.search(
+                    state.entity_id, timeout=_REGEX_TIMEOUT_SECONDS
                 ):
-                    out_of_scope += 1
-                    continue
-                entity_matches.append(friendly or state.entity_id)
+                    entity_matches.append(friendly or state.entity_id)
     except TimeoutError:
         _LOGGER.warning("Automation pattern for '%s' timed out: %s", task.title, pattern)
         return CheckResult(
@@ -691,11 +698,7 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
         )
 
     all_matches = matches + [f"automation: {m}" for m in entity_matches]
-    scope_note = (
-        f" ({out_of_scope} match(es) not referencing any '{task.integration}' entity discarded as unrelated)"
-        if out_of_scope
-        else ""
-    )
+    scope_note = _format_scope_note(task, out_of_scope)
 
     if all_matches:
         match_text = "\n".join(f"  - {m}" for m in all_matches[:10])
