@@ -12,6 +12,12 @@ permissions:
 
 jobs:
   release:
+    # The version-bump commit this job pushes touches custom_components/**
+    # and would retrigger the workflow; the second run races past the
+    # daily-release guard below (it queries the latest release before the
+    # first run has published), producing a duplicate release. Skip runs
+    # triggered by the bump commit outright.
+    if: "!startsWith(github.event.head_commit.message, 'Bump version to')"
     runs-on: ubuntu-latest
     steps:
       - name: Check for existing release today
