@@ -136,7 +136,11 @@ def describe_agent_error(error: str | None) -> str:
         return "AI service out of credits. Add credits at https://openrouter.ai/settings/credits"
     if "talking to api" in text.lower():
         return "AI service unavailable — check your conversation agent's API key and credits."
-    first_line = strip_markup(text).strip().splitlines()[0] if text.strip() else "Unknown error"
+    flattened = strip_markup(text).strip()
+    if not flattened:
+        # Nothing readable survived (an image-only or HTML-only error body).
+        return "Unknown error"
+    first_line = flattened.splitlines()[0]
     if len(first_line) > _MAX_ERROR_CHARS:
         first_line = first_line[: _MAX_ERROR_CHARS - 1].rstrip() + "…"
     return first_line
