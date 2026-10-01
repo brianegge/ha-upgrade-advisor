@@ -2,4 +2,4 @@ pytest-homeassistant-custom-component>=0.13.365
 regex>=2026.9.10
 hassil>=3.12.1
 home-assistant-intents>=2026.9.17
-gazetteer-matcher>=1.1.0
+gazetteer-matcher>=1.2.0
