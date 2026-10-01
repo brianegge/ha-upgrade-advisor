@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - "custom_components/**"
+  # The daily guard below skips every push after the first release of the day,
+  # and nothing re-triggers the skipped change later. Run this by hand to ship it.
+  workflow_dispatch:
 
 permissions:
   contents: write
