@@ -24,7 +24,7 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 
 ### Choosing an AI agent
 
-Any Home Assistant conversation agent works; this integration doesn't call an AI service itself. Set one up under **Settings > Devices & services** first, then pick it during setup.
+You need a conversation agent backed by a large language model: OpenAI, Google Generative AI, Anthropic, OpenRouter, Ollama, or similar. This integration doesn't call an AI service itself; set one up under **Settings > Devices & services** first, then pick it during setup. The built-in **Home Assistant** agent won't work: it only understands fixed voice commands, not free-form prompts.
 
 Each update costs **two AI requests**: one to plan the checks and one to summarize the results (plus one more if the planning step fails). Updates are analyzed one at a time, but when HACS surfaces several updates at once, that is still several requests within a minute or two.
 
@@ -125,6 +125,7 @@ Your configuration is read locally by Home Assistant; nothing needs to be on Git
 
 - The release notes (fetched from GitHub's public API)
 - Your integrations: each integration's domain and the title of each configured entry
+- A device summary grouped by integration: how many devices of each manufacturer and model (or the device's name, when it has no manufacturer or model) and how many entities of each type (`light`, `sensor`, ...)
 - Your HACS components and their installed versions
 - Your automations' names and on/off state — unless **Include automations** is turned off
 - In the summary step, the results of the checks it planned, including any matching config lines, with values redacted as described below

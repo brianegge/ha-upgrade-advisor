@@ -167,6 +167,6 @@ def test_describe_agent_error_unknown_is_flattened_and_truncated() -> None:
     assert len(message) <= 200
 
 
-def test_describe_agent_error_empty() -> None:
-    assert describe_agent_error(None) == "Unknown error"
-    assert describe_agent_error("") == "Unknown error"
+@pytest.mark.parametrize("error", [None, "", "   ", "![](https://example.invalid/x)", "<html><body></body></html>"])
+def test_describe_agent_error_nothing_readable(error: str | None) -> None:
+    assert describe_agent_error(error) == "Unknown error"
