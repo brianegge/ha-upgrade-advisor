@@ -112,3 +112,31 @@ def strip_markup(text: str) -> str:
     cleaned = _filter_links(cleaned, keep_allowed=False)
     cleaned = _HTML_TAG.sub("", cleaned)
     return _defang_bare_urls(cleaned, keep_allowed=False)
+
+
+_RATE_LIMIT = re.compile(r"\b429\b|rate.?limit|resource.?exhausted|quota", re.IGNORECASE)
+_MAX_ERROR_CHARS = 200
+
+
+def describe_agent_error(error: str | None) -> str:
+    """Turn a conversation-agent failure into one short, safe line.
+
+    Providers return raw API errors (a Gemini 429 is a multi-line JSON dump
+    with URLs, repeated per failed update). That text is untrusted and too
+    long for a report section or a notification, so known failures get a
+    plain explanation and anything else is flattened and truncated.
+    """
+    text = error or "Unknown error"
+    if _RATE_LIMIT.search(text):
+        return (
+            "AI service rate limit reached (HTTP 429). Free tiers allow only a few requests per "
+            "minute or day; re-run the analysis later or choose a model with higher limits."
+        )
+    if "402" in text or "credits" in text.lower():
+        return "AI service out of credits. Add credits at https://openrouter.ai/settings/credits"
+    if "talking to api" in text.lower():
+        return "AI service unavailable — check your conversation agent's API key and credits."
+    first_line = strip_markup(text).strip().splitlines()[0] if text.strip() else "Unknown error"
+    if len(first_line) > _MAX_ERROR_CHARS:
+        first_line = first_line[: _MAX_ERROR_CHARS - 1].rstrip() + "…"
+    return first_line

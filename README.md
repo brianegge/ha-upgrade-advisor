@@ -22,6 +22,16 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 - Home Assistant 2024.7.0 or newer
 - A configured AI conversation agent (e.g., via OpenRouter, OpenAI, Google Generative AI)
 
+### Choosing an AI agent
+
+Any Home Assistant conversation agent works; this integration doesn't call an AI service itself. Set one up under **Settings > Devices & services** first, then pick it during setup.
+
+Each update costs **two AI requests**: one to plan the checks and one to summarize the results (plus one more if the planning step fails). Updates are analyzed one at a time, but when HACS surfaces several updates at once, that is still several requests within a minute or two.
+
+- **Paid APIs** (OpenAI, Anthropic, Google, OpenRouter credits) — the most reliable choice. Cost depends on the model: HACS updates are small, while a Home Assistant core release sends the full release notes and blog post.
+- **Free tiers** — work, within their limits. Google Gemini's free tier allows only a few requests per minute and per day, so a batch of updates can hit HTTP 429 (rate limit) errors; the report then says so for each affected update, and you can re-run the analysis later. [OpenRouter's free models](https://openrouter.ai/collections/free-models) are another free option; which models are free changes over time.
+- **Local models** (Ollama) — free and private, with no rate limits. Report quality depends on the model; small models may not follow the structured output the integration needs.
+
 ## Installation
 
 ### HACS
@@ -109,6 +119,20 @@ The check results (with evidence) are sent back to the AI to produce a concise, 
 No action required — safe to upgrade.
 ```
 
+## What Is Sent to Your AI Agent
+
+Your configuration is read locally by Home Assistant; nothing needs to be on GitHub, and your YAML files are never sent wholesale. For each update, your AI agent receives:
+
+- The release notes (fetched from GitHub's public API)
+- Your integrations: each integration's domain and the title of each configured entry
+- Your HACS components and their installed versions
+- Your automations' names and on/off state — unless **Include automations** is turned off
+- In the summary step, the results of the checks it planned, including any matching config lines, with values redacted as described below
+
+The **Include add-ons** option currently sends nothing: reading the add-on list from the Supervisor is not implemented yet.
+
+All of this goes to whichever service runs your conversation agent. To keep it on your own hardware, use a local model.
+
 ## Security
 
 Release notes are third-party text and are treated as untrusted input end to end:
@@ -166,6 +190,6 @@ automation:
 
 - Advisory only — does not perform upgrades
 - Analysis quality depends on the AI conversation agent used
-- GitHub API rate limit: 60 requests/hour unauthenticated (sufficient for normal use)
+- Release notes come from GitHub's public API, which allows 60 unauthenticated requests per hour. Each update needs one or two requests, so this only matters if you analyze dozens of updates within an hour. It does not limit your AI agent.
 - Two LLM calls per HA core analysis (plan + summarize) — may take 1-2 minutes
 - HACS component detection relies on `release_url` attribute containing a GitHub URL

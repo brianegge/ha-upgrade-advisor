@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -60,7 +61,7 @@ from .const import (
 )
 from .github import async_get_ha_release_notes_range, async_get_hacs_release_notes
 from .pending_store import PendingAnalysis, PendingStore
-from .sanitize import sanitize_report
+from .sanitize import describe_agent_error, sanitize_report
 from .services import async_register_services, async_unregister_services
 from .summarize import build_installation_context
 
@@ -94,6 +95,10 @@ class UpgradeAdvisorCoordinator:
         self.post_upgrade_regressions: int = 0
         self.last_post_upgrade_check: str | None = None
         self.pending_store: PendingStore = PendingStore(hass)
+
+        # One analysis at a time: HACS often surfaces several updates at once,
+        # and parallel runs burst the agent past free-tier rate limits.
+        self._analysis_lock = asyncio.Lock()
 
     @callback
     def async_add_listener(self, listener: Any) -> Any:
@@ -364,7 +369,22 @@ class UpgradeAdvisorCoordinator:
         repo: str | None,
         entity_id: str | None = None,
     ) -> None:
-        """Run the full analysis pipeline."""
+        """Run the full analysis pipeline, one analysis at a time."""
+        async with self._analysis_lock:
+            await self._run_analysis_pipeline(
+                upgrade_type, component_name, current_version, target_version, repo, entity_id
+            )
+
+    async def _run_analysis_pipeline(
+        self,
+        upgrade_type: str,
+        component_name: str,
+        current_version: str,
+        target_version: str,
+        repo: str | None,
+        entity_id: str | None,
+    ) -> None:
+        """Fetch release notes, analyze, and publish the result."""
         self.status = "analyzing"
         self.current_version = current_version
         self.available_version = target_version
@@ -479,7 +499,7 @@ class UpgradeAdvisorCoordinator:
         for name, r in self.reports.items():
             anchor = _component_anchor(name)
             if r.error:
-                sections.append(f'<a id="{anchor}"></a>\n\n# {name}\n\nError: {r.error}')
+                sections.append(f'<a id="{anchor}"></a>\n\n# {name}\n\nError: {describe_agent_error(r.error)}')
             else:
                 sections.append(f'<a id="{anchor}"></a>\n\n{r.report}')
         self.report = "\n\n---\n\n".join(sections)
@@ -552,13 +572,7 @@ class UpgradeAdvisorCoordinator:
         """Create a notification when analysis fails."""
         safe_name = result.component_name.lower().replace(" ", "_")[:30]
         title = f"Upgrade Advisor: {result.component_name} analysis failed"
-        error_text = result.error or "Unknown error"
-        if "402" in error_text or "credits" in error_text.lower():
-            message = "**Error:** AI service out of credits. Add credits at https://openrouter.ai/settings/credits"
-        elif "talking to api" in error_text.lower():
-            message = f"**Error:** AI service unavailable — check your OpenRouter API key and credits. ({error_text})"
-        else:
-            message = f"**Error:** {error_text}"
+        message = f"**Error:** {describe_agent_error(result.error)}"
         async_create_notification(self.hass, message, title=title, notification_id=f"{DOMAIN}_{safe_name}_error")
 
     async def async_run_post_upgrade_checks(self) -> None:
