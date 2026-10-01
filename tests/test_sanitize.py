@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from custom_components.upgrade_advisor.sanitize import (
+    describe_agent_error,
     is_allowed_url,
     sanitize_report,
     strip_markup,
@@ -129,3 +130,43 @@ def test_strip_markup_defangs_all_urls() -> None:
 def test_strip_markup_preserves_plain_text() -> None:
     """Ordinary check titles are unchanged."""
     assert strip_markup("MQTT object_id removal") == "MQTT object_id removal"
+
+
+# --- describe_agent_error ---
+
+GEMINI_429 = (
+    "Sorry, I had a problem talking to Google Generative AI: 429 RESOURCE_EXHAUSTED. "
+    "{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan "
+    "and billing details.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': "
+    "'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API "
+    "quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}]}}"
+)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [GEMINI_429, "Error code: 429 - rate limit exceeded", "Rate limit reached for requests"],
+)
+def test_describe_agent_error_rate_limit(error: str) -> None:
+    message = describe_agent_error(error)
+    assert "rate limit" in message
+    assert "http" not in message.replace("HTTP 429", "")
+    assert len(message) < 250
+
+
+def test_describe_agent_error_credits() -> None:
+    assert "out of credits" in describe_agent_error("Error code: 402 - insufficient credits")
+
+
+def test_describe_agent_error_unknown_is_flattened_and_truncated() -> None:
+    error = "Boom ![x](https://evil.example/p.png) [click](https://evil.example)" + " pad" * 100 + "\nsecond line"
+    message = describe_agent_error(error)
+    assert "https://evil.example" not in message
+    assert "![" not in message
+    assert "second line" not in message
+    assert len(message) <= 200
+
+
+def test_describe_agent_error_empty() -> None:
+    assert describe_agent_error(None) == "Unknown error"
+    assert describe_agent_error("") == "Unknown error"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 from homeassistant.core import HomeAssistant, State
@@ -110,7 +111,7 @@ async def test_store_result_error_includes_anchor(hass: HomeAssistant) -> None:
     coordinator._store_result(result)
 
     assert '<a id="powercalc-update"></a>' in coordinator.report
-    assert "Error talking to API" in coordinator.report
+    assert "AI service unavailable" in coordinator.report
 
 
 # --- _async_output_error ---
@@ -144,7 +145,7 @@ async def test_async_output_error_creates_notification(hass: HomeAssistant) -> N
 
     mock_notify.assert_called_once()
     args = mock_notify.call_args
-    assert "Error talking to API" in args[0][1]
+    assert "AI service unavailable" in args[0][1]
     assert "analysis failed" in args.kwargs.get("title", args[0][2] if len(args[0]) > 2 else "")
 
 
@@ -291,3 +292,38 @@ async def test_agent_id_falls_back_to_data(hass: HomeAssistant) -> None:
 
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     assert coordinator.agent_id == MOCK_AGENT_ID
+
+
+# --- analysis serialization ---
+
+
+async def test_concurrent_analyses_run_one_at_a_time(hass: HomeAssistant) -> None:
+    """Updates that appear together are analyzed sequentially, not in parallel."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Mock AI Agent",
+        data={CONF_AGENT_ID: MOCK_AGENT_ID},
+        unique_id=DOMAIN,
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+    running = 0
+    peak = 0
+
+    async def fake_pipeline(*args: object) -> None:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+
+    with patch.object(coordinator, "_run_analysis_pipeline", side_effect=fake_pipeline) as pipeline:
+        await asyncio.gather(
+            *(coordinator._run_analysis("HACS Component", f"comp{i}", "1.0", "2.0", f"o/r{i}") for i in range(3))
+        )
+
+    assert pipeline.call_count == 3
+    assert peak == 1
