@@ -7,6 +7,12 @@
 # input to the integration. See README "Security" and hacs/default#6780.
 
 reviews:
+  # CodeRabbit stopped auto-reviewing repos with fewer than 10 stars, and its
+  # only output here was a "review skipped" comment (and email) on every PR.
+  # Review on demand instead: comment `@coderabbitai review` on the PR.
+  auto_review:
+    enabled: false
+  review_status: false
   path_instructions:
     - path: "custom_components/upgrade_advisor/**"
       instructions: |
