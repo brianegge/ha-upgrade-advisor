@@ -42,10 +42,13 @@ from .community import (
     CommunitySignal,
     async_find_custom_integration_domain,
     async_get_core_adoption,
+    async_get_core_issues,
     async_get_core_release_dates,
     async_get_custom_adoption,
     async_get_release_date,
+    earliest_release_in_range,
     format_community_signal,
+    format_issues_for_prompt,
     insert_before_footer,
 )
 from .const import (
@@ -54,6 +57,7 @@ from .const import (
     CONF_DASHBOARD_PATH,
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
+    CONF_INCLUDE_ISSUES,
     CONF_POST_UPGRADE_CHECK,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
@@ -61,6 +65,7 @@ from .const import (
     DEFAULT_DASHBOARD_PATH,
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
+    DEFAULT_INCLUDE_ISSUES,
     DEFAULT_POST_UPGRADE_CHECK,
     DEFAULT_SCAN_HACS,
     DEFAULT_SCAN_ON_UPDATE,
@@ -245,6 +250,7 @@ class UpgradeAdvisorCoordinator:
         release_notes: str,
         context: dict[str, Any],
         hacs_components: str,
+        community_issues: str = "",
     ) -> AnalysisResult:
         """Run the two-phase analysis: LLM plans checks, we execute them, LLM summarizes."""
         # Phase 1: Ask LLM to plan checks
@@ -272,6 +278,7 @@ class UpgradeAdvisorCoordinator:
                 release_notes,
                 context,
                 hacs_components,
+                community_issues,
             )
 
         # Parse check tasks from LLM response
@@ -287,6 +294,7 @@ class UpgradeAdvisorCoordinator:
                 release_notes,
                 context,
                 hacs_components,
+                community_issues,
             )
 
         _LOGGER.info("Phase 2: Running %d checks", len(tasks))
@@ -304,6 +312,7 @@ class UpgradeAdvisorCoordinator:
             current_version=current_version,
             target_version=target_version,
             check_results=results_text,
+            community_issues=community_issues,
         )
 
         try:
@@ -351,6 +360,7 @@ class UpgradeAdvisorCoordinator:
         release_notes: str,
         context: dict[str, Any],
         hacs_components: str,
+        community_issues: str = "",
     ) -> AnalysisResult:
         """Fall back to single-pass analysis if two-phase fails."""
         prompt = build_single_pass_prompt(
@@ -361,6 +371,7 @@ class UpgradeAdvisorCoordinator:
             release_notes=release_notes,
             context=context,
             hacs_components=hacs_components,
+            community_issues=community_issues,
         )
         return await async_analyze(
             self.hass,
@@ -424,6 +435,9 @@ class UpgradeAdvisorCoordinator:
 
         agent_id = self.agent_id
 
+        # Community signal: release age, adoption and matching bug reports.
+        community = await self._async_get_community_signal(session, repo, current_version, target_version)
+
         # Two-phase analysis for all updates
         result = await self._run_two_phase_analysis(
             agent_id=agent_id,
@@ -434,6 +448,7 @@ class UpgradeAdvisorCoordinator:
             release_notes=release_notes,
             context=context,
             hacs_components=hacs_components,
+            community_issues=format_issues_for_prompt(community),
         )
 
         # The report is LLM-authored from untrusted release notes, and it is
@@ -447,10 +462,10 @@ class UpgradeAdvisorCoordinator:
             update_state = self.hass.states.get(entity_id) if entity_id else None
             result.report = add_release_link(result.report, _resolve_release_url(update_state, repo, target_version))
 
-        # Community signal: release age + adoption. Added after sanitizing
-        # because it is built from structured data, not model output.
+        # The community block is added after sanitizing: it is built from
+        # structured data (its issue titles are escaped), not model output.
+        result.community = community
         if not result.error:
-            result.community = await self._async_get_community_signal(session, repo, current_version, target_version)
             result.report = insert_before_footer(
                 result.report, format_community_signal(result.community, target_version)
             )
@@ -483,6 +498,11 @@ class UpgradeAdvisorCoordinator:
                 dates = await async_get_core_release_dates(session)
                 signal.release_date = dates.get(target_version)
                 signal.adoption = await async_get_core_adoption(session, target_version)
+                if self._get_option(CONF_INCLUDE_ISSUES, DEFAULT_INCLUDE_ISSUES):
+                    first = earliest_release_in_range(dates, current_version, target_version)
+                    if first is not None:
+                        signal.issues_since, since = first
+                        signal.issues = await async_get_core_issues(session, since, _loaded_domains(self.hass))
             else:
                 signal.release_date = await async_get_release_date(session, repo, target_version)
                 domain = await async_find_custom_integration_domain(self.hass, repo)
@@ -782,6 +802,11 @@ def _resolve_release_url(update_state: State | None, repo: str | None, target_ve
     if repo:
         return f"https://github.com/{repo}/releases/tag/{target_version}"
     return f"https://github.com/home-assistant/core/releases/tag/{target_version}"
+
+
+def _loaded_domains(hass: HomeAssistant) -> set[str]:
+    """Top-level integration domains loaded in this installation."""
+    return {component for component in hass.config.components if "." not in component}
 
 
 def _component_anchor(name: str) -> str:

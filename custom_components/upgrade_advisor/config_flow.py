@@ -16,6 +16,7 @@ from .const import (
     CONF_DASHBOARD_PATH,
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
+    CONF_INCLUDE_ISSUES,
     CONF_POST_UPGRADE_CHECK,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
@@ -23,6 +24,7 @@ from .const import (
     DEFAULT_DASHBOARD_PATH,
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
+    DEFAULT_INCLUDE_ISSUES,
     DEFAULT_POST_UPGRADE_CHECK,
     DEFAULT_SCAN_HACS,
     DEFAULT_SCAN_ON_UPDATE,
@@ -149,6 +151,10 @@ class UpgradeAdvisorOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_INCLUDE_ADDONS,
                         default=self.config_entry.options.get(CONF_INCLUDE_ADDONS, DEFAULT_INCLUDE_ADDONS),
+                    ): bool,
+                    vol.Required(
+                        CONF_INCLUDE_ISSUES,
+                        default=self.config_entry.options.get(CONF_INCLUDE_ISSUES, DEFAULT_INCLUDE_ISSUES),
                     ): bool,
                     vol.Optional(
                         CONF_DASHBOARD_PATH,

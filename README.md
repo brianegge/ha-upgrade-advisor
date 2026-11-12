@@ -16,7 +16,7 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 - Uses any HA conversation agent (OpenAI, Google, Anthropic, Ollama, etc. via OpenRouter)
 - Creates repair issues for verified breaking changes
 - Risk assessment (Low/Medium/High) based on evidence, not speculation
-- Community signal: release age and how many Home Assistant installs already run the new version
+- Community signal: release age, how many Home Assistant installs already run the new version, and open bug reports for the integrations you use
 
 ## Requirements
 
@@ -86,6 +86,7 @@ Go to **Settings > Integrations > Upgrade Advisor > Configure**:
 | Create repair issues | On | Create repairs for breaking changes |
 | Include automations | On | Send automation list to AI for context |
 | Include add-ons | On | Send add-on list to AI for context |
+| Include open GitHub bug reports | On | For Core updates, list open issues filed since the release for integrations you use |
 | Dashboard URL path | `upgrade-advisor` | Path to the report dashboard |
 
 ## How It Works
@@ -129,7 +130,20 @@ Each report ends with a one-line community signal, the same kind of adoption bad
 - **Release age** comes from the GitHub release's publish date.
 - **Adoption** comes from Home Assistant's public, opt-in [analytics](https://analytics.home-assistant.io): Core versions from `current_data.json`, HACS integrations from `custom_integrations.json` (matched to the integration whose manifest points at the update's GitHub repo). Betas and local builds are excluded.
 
-The analytics are a daily snapshot of installs that opted in, so a release only a few hours old shows little or no adoption yet. Nothing about your installation is sent to fetch this data.
+The analytics are a daily snapshot of installs that opted in, so a release only a few hours old shows little or no adoption yet.
+
+### Open bug reports (Home Assistant Core)
+
+Release notes cover planned changes; regressions show up in the issue tracker once people start upgrading. For Core updates, the integration searches `home-assistant/core` for open issues filed since the first release after your installed version, keeps only those labelled `integration: <domain>` for a domain loaded in your installation, and lists the five most-reacted under the community signal:
+
+> **Open bug reports since 2026.11.0 for your integrations:**
+> - #190913 Zigbee(Hue) light groups failing to respond to commands after 2026.11 — `zha` · 4 reactions, 2 comments
+
+Your AI agent sees the same list. An issue that describes a regression in something you demonstrably use can raise the risk to Medium (never High) and add a "consider waiting for a patch release" note to the verdict, but issues never count as breaking changes.
+
+This uses GitHub's unauthenticated search API (about five requests per Core analysis). HACS repositories are not searched yet, because their unauthenticated limits are much tighter. Turn it off with **Include open GitHub bug reports**.
+
+Nothing about your installation is sent to fetch any of this: the analytics files are downloaded whole, and the issue search only names the date. Matching against your integrations happens locally.
 
 ## What Is Sent to Your AI Agent
 
@@ -139,6 +153,7 @@ Your configuration is read locally by Home Assistant; nothing needs to be on Git
 - Your integrations: each integration's domain and the title of each configured entry
 - A device summary grouped by integration: how many devices of each manufacturer and model (or the device's name, when it has no manufacturer or model) and how many entities of each type (`light`, `sensor`, ...)
 - Your HACS components and their installed versions
+- For Core updates, the titles of open GitHub issues that match your integrations (see [Community Signal](#community-signal))
 - Your automations' names and on/off state — unless **Include automations** is turned off
 - In the summary step, the results of the checks it planned, including any matching config lines, with values redacted as described below
 

@@ -10,14 +10,15 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from aiohttp import ClientSession, ClientTimeout
 
 from .const import GITHUB_API_BASE, HA_CORE_REPO
-from .github import _version_tuple
+from .github import _is_version_between, _version_tuple
+from .sanitize import strip_markup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,15 @@ _TIMEOUT = ClientTimeout(total=30)
 # Analytics is regenerated roughly daily; refetching more often wastes bandwidth.
 _CACHE_TTL_SECONDS = 6 * 3600
 _cache: dict[str, tuple[float, Any]] = {}
+
+GITHUB_SEARCH_URL = f"{GITHUB_API_BASE}/search/issues"
+_INTEGRATION_LABEL = "integration: "
+# Issues tagged with more integrations than this are sweeping chores
+# (e.g. "add X to all integrations"), not regression reports.
+_MAX_INTEGRATION_LABELS = 3
+_MAX_ISSUE_PAGES = 5
+_MAX_TITLE_CHARS = 120
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_\[\]<>|#~])")
 
 # Version strings we don't count toward adoption (betas, dev builds, local forks).
 _PRERELEASE_RE = re.compile(r"(a|b|rc|dev|beta|alpha|\+)", re.IGNORECASE)
@@ -50,11 +60,25 @@ class Adoption:
 
 
 @dataclass
+class CommunityIssue:
+    """An open GitHub issue that matches an installed integration."""
+
+    number: int
+    title: str
+    url: str
+    reactions: int
+    comments: int
+    integrations: list[str]
+
+
+@dataclass
 class CommunitySignal:
-    """Release age and adoption for one component's target version."""
+    """Release age, adoption and open bug reports for one component's target version."""
 
     release_date: datetime | None = None
     adoption: Adoption | None = None
+    issues: list[CommunityIssue] = field(default_factory=list)
+    issues_since: str | None = None
 
     def release_age_days(self, now: datetime | None = None) -> int | None:
         """Whole days since the target version was released."""
@@ -202,6 +226,93 @@ async def async_find_custom_integration_domain(hass: Any, repo: str) -> str | No
     return None
 
 
+def earliest_release_in_range(dates: dict[str, datetime], current: str, target: str) -> tuple[str, datetime] | None:
+    """The first release after `current` up to `target` — when regressions could start appearing."""
+    in_range = [(tag, date) for tag, date in dates.items() if _is_version_between(tag, current, target)]
+    if not in_range:
+        return (target, dates[target]) if target in dates else None
+    return min(in_range, key=lambda item: _version_tuple(item[0]))
+
+
+def _issue_from_item(item: dict[str, Any], domains: set[str]) -> CommunityIssue | None:
+    if "pull_request" in item:
+        return None
+    labels = [label.get("name", "") for label in item.get("labels") or [] if isinstance(label, dict)]
+    integrations = [name[len(_INTEGRATION_LABEL) :] for name in labels if name.startswith(_INTEGRATION_LABEL)]
+    if not integrations or len(integrations) > _MAX_INTEGRATION_LABELS:
+        return None
+    matched = sorted(i for i in integrations if i in domains)
+    if not matched:
+        return None
+    url = item.get("html_url") or ""
+    if not url.startswith(f"https://github.com/{HA_CORE_REPO}/issues/"):
+        return None
+    return CommunityIssue(
+        number=int(item.get("number") or 0),
+        title=str(item.get("title") or ""),
+        url=url,
+        reactions=int((item.get("reactions") or {}).get("total_count") or 0),
+        comments=int(item.get("comments") or 0),
+        integrations=matched,
+    )
+
+
+async def async_get_core_issues(
+    session: ClientSession, since: datetime, domains: set[str], limit: int = 5
+) -> list[CommunityIssue]:
+    """Open Home Assistant Core issues filed since `since` for installed integrations.
+
+    Core labels every issue `integration: <domain>`, so one unauthenticated
+    search (paged, most-reacted first) is filtered locally against the
+    domains loaded in this installation. Ranked by reactions, then comments.
+    """
+    if not domains:
+        return []
+    query = f"repo:{HA_CORE_REPO} is:issue is:open created:>={since.date().isoformat()}"
+    found: dict[int, CommunityIssue] = {}
+    for page in range(1, _MAX_ISSUE_PAGES + 1):
+        params = {"q": query, "sort": "reactions", "order": "desc", "per_page": "100", "page": str(page)}
+        try:
+            async with session.get(GITHUB_SEARCH_URL, params=params, timeout=_TIMEOUT) as resp:
+                if resp.status in (403, 422, 429):
+                    _LOGGER.debug("GitHub issue search stopped with HTTP %d", resp.status)
+                    break
+                resp.raise_for_status()
+                data = await resp.json()
+        except Exception:
+            _LOGGER.warning("Failed to search GitHub issues", exc_info=True)
+            break
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            break
+        for item in items:
+            if isinstance(item, dict) and (issue := _issue_from_item(item, domains)):
+                found[issue.number] = issue
+        if len(items) < 100:
+            break
+    ranked = sorted(found.values(), key=lambda i: (i.reactions, i.comments, i.number), reverse=True)
+    return ranked[:limit]
+
+
+def _safe_title(title: str) -> str:
+    """Issue titles are user-submitted: flatten markup and escape markdown."""
+    flat = " ".join(strip_markup(title).split())
+    if len(flat) > _MAX_TITLE_CHARS:
+        flat = flat[: _MAX_TITLE_CHARS - 1].rstrip() + "…"
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", flat)
+
+
+def format_issues_for_prompt(signal: CommunitySignal) -> str:
+    """One line per issue for the AI prompt (empty when there are none)."""
+    lines = []
+    for issue in signal.issues:
+        lines.append(
+            f"- #{issue.number} [{', '.join(issue.integrations)}] {_safe_title(issue.title)} "
+            f"({issue.reactions} reactions, {issue.comments} comments)"
+        )
+    return "\n".join(lines)
+
+
 def format_community_signal(signal: CommunitySignal, target_version: str, now: datetime | None = None) -> str:
     """Render the community signal as a short markdown block (empty if no data)."""
     parts: list[str] = []
@@ -211,9 +322,21 @@ def format_community_signal(signal: CommunitySignal, target_version: str, now: d
     if signal.adoption is not None:
         a = signal.adoption
         parts.append(f"{a.pct:g}% of {a.total:,} reporting installs on {target_version} or newer")
-    if not parts:
-        return ""
-    return "**Community signal:** " + " · ".join(parts)
+    blocks: list[str] = []
+    if parts:
+        blocks.append("**Community signal:** " + " · ".join(parts))
+    if signal.issues:
+        since = f" since {signal.issues_since}" if signal.issues_since else ""
+        lines = [f"**Open bug reports{since} for your integrations:**"]
+        for issue in signal.issues:
+            stats = f"{issue.reactions} reaction{'s' if issue.reactions != 1 else ''}"
+            stats += f", {issue.comments} comment{'s' if issue.comments != 1 else ''}"
+            lines.append(
+                f"- [#{issue.number}]({issue.url}) {_safe_title(issue.title)} — "
+                f"`{', '.join(issue.integrations)}` · {stats}"
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def insert_before_footer(report: str, block: str) -> str:

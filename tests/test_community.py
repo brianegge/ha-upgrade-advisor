@@ -223,3 +223,121 @@ async def test_coordinator_community_signal_core_and_hacs(hass: HomeAssistant) -
     with patch(f"{prefix}.async_get_core_release_dates", AsyncMock(side_effect=RuntimeError)):
         failed = await coordinator._async_get_community_signal(None, None, "a", "b")
     assert failed == CommunitySignal()
+
+
+def _issue_item(number: int, labels: list[str], reactions: int = 0, comments: int = 0, **extra: Any) -> dict:
+    return {
+        "number": number,
+        "title": f"Issue {number}",
+        "html_url": f"https://github.com/home-assistant/core/issues/{number}",
+        "labels": [{"name": name} for name in labels],
+        "reactions": {"total_count": reactions},
+        "comments": comments,
+        **extra,
+    }
+
+
+SEARCH_PREFIX = "https://api.github.com/search/issues"
+
+
+async def test_core_issues_filters_to_installed_integrations() -> None:
+    items = [
+        _issue_item(1, ["integration: zha"], reactions=1, comments=9),
+        _issue_item(2, ["integration: hue", "bug"], reactions=5),
+        _issue_item(3, ["integration: tuya"], reactions=50),  # not installed
+        _issue_item(4, ["bug"]),  # no integration label
+        _issue_item(5, [f"integration: d{i}" for i in range(4)] + ["integration: zha"]),  # sweeping chore
+        _issue_item(6, ["integration: zha"], pull_request={}),  # a PR
+        _issue_item(7, ["integration: zha"], html_url="https://evil.example/7"),
+    ]
+    session = FakeSession({SEARCH_PREFIX: (200, {"items": items})})
+    issues = await community.async_get_core_issues(
+        session, datetime(2026, 11, 5, tzinfo=UTC), {"zha", "hue", "d0", "d1", "d2", "d3"}
+    )
+    assert [i.number for i in issues] == [2, 1]
+    assert issues[0].integrations == ["hue"]
+    assert len(session.calls) == 1
+
+
+async def test_core_issues_pages_and_limits() -> None:
+    page = [_issue_item(n, ["integration: zha"], reactions=n) for n in range(100)]
+    session = FakeSession({SEARCH_PREFIX: (200, {"items": page})})
+    issues = await community.async_get_core_issues(session, datetime(2026, 11, 5, tzinfo=UTC), {"zha"}, limit=3)
+    assert [i.number for i in issues] == [99, 98, 97]
+    # Full pages keep paging, up to the cap
+    assert len(session.calls) == 5
+
+
+async def test_core_issues_rate_limited_or_no_domains() -> None:
+    since = datetime(2026, 11, 5, tzinfo=UTC)
+    assert await community.async_get_core_issues(FakeSession({SEARCH_PREFIX: (403, {})}), since, {"zha"}) == []
+    session = FakeSession({SEARCH_PREFIX: (200, {"items": []})})
+    assert await community.async_get_core_issues(session, since, set()) == []
+    assert session.calls == []
+
+
+def test_earliest_release_in_range() -> None:
+    d = {
+        "2026.10.4": datetime(2026, 10, 20, tzinfo=UTC),
+        "2026.11.0": datetime(2026, 11, 5, tzinfo=UTC),
+        "2026.11.1": datetime(2026, 11, 7, tzinfo=UTC),
+    }
+    assert community.earliest_release_in_range(d, "2026.10.4", "2026.11.1") == ("2026.11.0", d["2026.11.0"])
+    assert community.earliest_release_in_range(d, "2026.11.0", "2026.11.1") == ("2026.11.1", d["2026.11.1"])
+    assert community.earliest_release_in_range({}, "1", "2") is None
+
+
+def test_issue_titles_are_escaped() -> None:
+    issue = community.CommunityIssue(
+        number=9,
+        title="Broken ![x](https://evil.example/i.png) <b>bold</b> [click](https://evil.example) *now*",
+        url="https://github.com/home-assistant/core/issues/9",
+        reactions=1,
+        comments=2,
+        integrations=["zha"],
+    )
+    signal = CommunitySignal(issues=[issue], issues_since="2026.11.0")
+    block = format_community_signal(signal, "2026.11.1")
+    assert "evil.example" not in block
+    assert "<b>" not in block
+    assert "\\*now\\*" in block
+    assert block.startswith("**Open bug reports since 2026.11.0 for your integrations:**\n- [#9](")
+    assert "1 reaction, 2 comments" in block
+    assert community.format_issues_for_prompt(signal).startswith("- #9 [zha] Broken")
+    assert community.format_issues_for_prompt(CommunitySignal()) == ""
+
+
+async def test_coordinator_fetches_issues_since_first_release_in_range(hass: HomeAssistant) -> None:
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.upgrade_advisor import UpgradeAdvisorCoordinator
+    from custom_components.upgrade_advisor.const import CONF_INCLUDE_ISSUES, DOMAIN
+
+    from .conftest import MOCK_CONFIG
+
+    hass.config.components.update({"zha", "zha.light"})
+    dates = {"2026.11.0": datetime(2026, 11, 5, tzinfo=UTC), "2026.11.1": datetime(2026, 11, 7, tzinfo=UTC)}
+    prefix = "custom_components.upgrade_advisor"
+    get_issues = AsyncMock(return_value=[])
+
+    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG.copy(), unique_id=DOMAIN)
+    coordinator = UpgradeAdvisorCoordinator(hass, entry)
+    with (
+        patch(f"{prefix}.async_get_core_release_dates", AsyncMock(return_value=dates)),
+        patch(f"{prefix}.async_get_core_adoption", AsyncMock(return_value=None)),
+        patch(f"{prefix}.async_get_core_issues", get_issues),
+    ):
+        signal = await coordinator._async_get_community_signal(None, None, "2026.10.4", "2026.11.1")
+        assert signal.issues_since == "2026.11.0"
+        _, since, domains = get_issues.await_args.args
+        assert since == dates["2026.11.0"]
+        assert "zha" in domains and "zha.light" not in domains
+
+        get_issues.reset_mock()
+        disabled = MockConfigEntry(
+            domain=DOMAIN, data=MOCK_CONFIG.copy(), options={CONF_INCLUDE_ISSUES: False}, unique_id="x"
+        )
+        await UpgradeAdvisorCoordinator(hass, disabled)._async_get_community_signal(
+            None, None, "2026.10.4", "2026.11.1"
+        )
+        get_issues.assert_not_awaited()

@@ -31,10 +31,12 @@
           "create_repair_issues": "Create repair issues for breaking changes",
           "include_automations": "Include automations in analysis context",
           "include_addons": "Include add-ons in analysis context",
+          "include_github_issues": "Include open GitHub bug reports for your integrations (Home Assistant Core)",
           "dashboard_path": "Dashboard URL path (e.g., upgrade-advisor)"
         },
         "data_description": {
-          "agent_id": "The AI agent that will analyze release notes against your configuration"
+          "agent_id": "The AI agent that will analyze release notes against your configuration",
+          "include_github_issues": "Search home-assistant/core for open issues filed since the release and labelled with an integration you use. Shown in the report and used by the AI to weigh risk."
         }
       }
     },

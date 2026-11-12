@@ -14,6 +14,7 @@ CONF_INCLUDE_AUTOMATIONS: Final = "include_automations"
 CONF_INCLUDE_ADDONS: Final = "include_addons"
 CONF_DASHBOARD_PATH: Final = "dashboard_path"
 CONF_POST_UPGRADE_CHECK: Final = "post_upgrade_check"
+CONF_INCLUDE_ISSUES: Final = "include_github_issues"
 
 DEFAULT_SCAN_ON_UPDATE: Final = True
 DEFAULT_SCAN_HACS: Final = True
@@ -22,6 +23,7 @@ DEFAULT_INCLUDE_AUTOMATIONS: Final = True
 DEFAULT_INCLUDE_ADDONS: Final = True
 DEFAULT_DASHBOARD_PATH: Final = ""
 DEFAULT_POST_UPGRADE_CHECK: Final = True
+DEFAULT_INCLUDE_ISSUES: Final = True
 
 STARTUP_DELAY_SECONDS: Final = 300  # Wait 5 minutes for entities to become available
 PENDING_STORAGE_KEY: Final = f"{DOMAIN}_pending"

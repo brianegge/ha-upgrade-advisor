@@ -363,3 +363,17 @@ async def test_async_analyze_exception(hass: HomeAssistant) -> None:
 
     assert result.error is not None
     assert "Connection failed" in result.error
+
+
+def test_community_section_only_when_issues_present() -> None:
+    from custom_components.upgrade_advisor.analyzer import build_single_pass_prompt, build_summary_prompt
+
+    without = build_summary_prompt("Home Assistant Core", "Home Assistant", "1", "2", "results")
+    assert "Open Bug Reports" not in without
+    with_issues = build_summary_prompt(
+        "Home Assistant Core", "Home Assistant", "1", "2", "results", community_issues="- #1 [zha] Broken"
+    )
+    assert "<open_issues>\n- #1 [zha] Broken\n</open_issues>" in with_issues
+    assert "NEVER count toward BREAKING_CHANGES" in with_issues
+    single = build_single_pass_prompt("t", "c", "1", "2", "notes", {}, community_issues="- #1 [zha] Broken")
+    assert "<open_issues>" in single
