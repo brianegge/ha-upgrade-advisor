@@ -395,6 +395,8 @@ class AnalysisResult:
     # plan for a post-upgrade replay. Not serialized to the user-facing report.
     check_tasks: list[Any] | None = None
     check_results: list[Any] | None = None
+    # Community signal (release age / adoption); populated by the coordinator.
+    community: Any | None = None
 
 
 def build_planning_prompt(

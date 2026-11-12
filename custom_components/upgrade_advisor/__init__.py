@@ -38,6 +38,16 @@ from .checker import (
     format_check_results,
     parse_check_tasks,
 )
+from .community import (
+    CommunitySignal,
+    async_find_custom_integration_domain,
+    async_get_core_adoption,
+    async_get_core_release_dates,
+    async_get_custom_adoption,
+    async_get_release_date,
+    format_community_signal,
+    insert_before_footer,
+)
 from .const import (
     CONF_AGENT_ID,
     CONF_CREATE_REPAIRS,
@@ -85,6 +95,8 @@ class UpgradeAdvisorCoordinator:
         self.available_version: str | None = None
         self.last_analysis: str | None = None
         self.breaking_change_count: int = 0
+        self.release_age_days: int | None = None
+        self.adoption_pct: float | None = None
 
         # All reports from the current scan (keyed by component name)
         self.reports: dict[str, AnalysisResult] = {}
@@ -435,6 +447,14 @@ class UpgradeAdvisorCoordinator:
             update_state = self.hass.states.get(entity_id) if entity_id else None
             result.report = add_release_link(result.report, _resolve_release_url(update_state, repo, target_version))
 
+        # Community signal: release age + adoption. Added after sanitizing
+        # because it is built from structured data, not model output.
+        if not result.error:
+            result.community = await self._async_get_community_signal(session, repo, current_version, target_version)
+            result.report = insert_before_footer(
+                result.report, format_community_signal(result.community, target_version)
+            )
+
         # Store results
         self._store_result(result)
 
@@ -448,6 +468,29 @@ class UpgradeAdvisorCoordinator:
             await self._async_persist_pending(result, entity_id)
 
         self._async_notify_listeners()
+
+    async def _async_get_community_signal(
+        self,
+        session: ClientSession,
+        repo: str | None,
+        current_version: str,
+        target_version: str,
+    ) -> CommunitySignal:
+        """Best-effort release age and adoption for the target version."""
+        signal = CommunitySignal()
+        try:
+            if repo is None:
+                dates = await async_get_core_release_dates(session)
+                signal.release_date = dates.get(target_version)
+                signal.adoption = await async_get_core_adoption(session, target_version)
+            else:
+                signal.release_date = await async_get_release_date(session, repo, target_version)
+                domain = await async_find_custom_integration_domain(self.hass, repo)
+                if domain:
+                    signal.adoption = await async_get_custom_adoption(session, domain, target_version)
+        except Exception:
+            _LOGGER.warning("Failed to gather community signal for %s", target_version, exc_info=True)
+        return signal
 
     async def _async_persist_pending(self, result: AnalysisResult, entity_id: str | None) -> None:
         """Save the pre-upgrade plan so we can re-run it after the upgrade lands."""
@@ -507,6 +550,9 @@ class UpgradeAdvisorCoordinator:
         # Track latest component for version display
         self.current_version = result.current_version
         self.available_version = result.target_version
+        community = result.community
+        self.release_age_days = community.release_age_days() if community else None
+        self.adoption_pct = community.adoption.pct if community and community.adoption else None
 
     async def _async_output_results(self, result: AnalysisResult) -> None:
         """Create notifications, repair issues, and fire events."""

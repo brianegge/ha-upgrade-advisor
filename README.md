@@ -16,6 +16,7 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 - Uses any HA conversation agent (OpenAI, Google, Anthropic, Ollama, etc. via OpenRouter)
 - Creates repair issues for verified breaking changes
 - Risk assessment (Low/Medium/High) based on evidence, not speculation
+- Community signal: release age and how many Home Assistant installs already run the new version
 
 ## Requirements
 
@@ -119,6 +120,17 @@ The check results (with evidence) are sent back to the AI to produce a concise, 
 No action required — safe to upgrade.
 ```
 
+## Community Signal
+
+Each report ends with a one-line community signal, the same kind of adoption badge Renovate shows:
+
+> **Community signal:** released 6 days ago · 24.5% of 728,158 reporting installs on 2026.11.1 or newer
+
+- **Release age** comes from the GitHub release's publish date.
+- **Adoption** comes from Home Assistant's public, opt-in [analytics](https://analytics.home-assistant.io): Core versions from `current_data.json`, HACS integrations from `custom_integrations.json` (matched to the integration whose manifest points at the update's GitHub repo). Betas and local builds are excluded.
+
+The analytics are a daily snapshot of installs that opted in, so a release only a few hours old shows little or no adoption yet. Nothing about your installation is sent to fetch this data.
+
 ## What Is Sent to Your AI Agent
 
 Your configuration is read locally by Home Assistant; nothing needs to be on GitHub, and your YAML files are never sent wholesale. For each update, your AI agent receives:
@@ -159,6 +171,8 @@ Release notes are third-party text and are treated as untrusted input end to end
 - `available_version` — target version
 - `last_analysis` — timestamp of last report
 - `breaking_change_count` — number of verified breaking changes
+- `release_age_days` — days since the latest analyzed version was released (when known)
+- `adoption_pct` — percent of reporting installs on that version or newer (when known)
 - `report` — full report (markdown), including all analyzed components
 
 ## Services

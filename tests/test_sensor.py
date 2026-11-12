@@ -110,3 +110,26 @@ async def test_status_sensor_updates_on_analysis(hass: HomeAssistant) -> None:
     assert state is not None
     assert state.state == "report_ready"
     assert state.attributes["report"] == "Test report"
+
+
+async def test_status_sensor_exposes_community_attributes(hass: HomeAssistant) -> None:
+    """release_age_days / adoption_pct appear only when known."""
+    from unittest.mock import MagicMock
+
+    from custom_components.upgrade_advisor.sensor import UpgradeAdvisorStatusSensor
+
+    coordinator = MagicMock()
+    coordinator.report = None
+    coordinator.post_upgrade_report = None
+    coordinator.release_age_days = 6
+    coordinator.adoption_pct = 24.5
+    entry = MagicMock()
+    entry.entry_id = "abc"
+    attrs = UpgradeAdvisorStatusSensor(coordinator, entry).extra_state_attributes
+    assert attrs["release_age_days"] == 6
+    assert attrs["adoption_pct"] == 24.5
+
+    coordinator.release_age_days = None
+    coordinator.adoption_pct = None
+    attrs = UpgradeAdvisorStatusSensor(coordinator, entry).extra_state_attributes
+    assert "release_age_days" not in attrs and "adoption_pct" not in attrs
