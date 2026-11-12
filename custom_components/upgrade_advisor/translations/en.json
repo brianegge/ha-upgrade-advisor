@@ -27,6 +27,8 @@
           "agent_id": "Conversation agent",
           "scan_on_update_available": "Analyze automatically when updates are available",
           "scan_hacs_updates": "Analyze HACS component updates",
+          "min_release_age_days": "Wait this many days after a release before analyzing",
+          "min_adoption_pct": "Wait until this percent of installs run the new version",
           "post_upgrade_check": "Verify upgrades after they land (re-run checks post-upgrade)",
           "create_repair_issues": "Create repair issues for breaking changes",
           "include_automations": "Include automations in analysis context",
@@ -36,6 +38,8 @@
         },
         "data_description": {
           "agent_id": "The AI agent that will analyze release notes against your configuration",
+          "min_release_age_days": "Automatic analysis is held until the release is this old, giving bug reports time to accumulate. 0 = analyze immediately. Manual service calls always run.",
+          "min_adoption_pct": "Automatic analysis is held until this share of Home Assistant installs (opt-in analytics) runs the new version or newer. Waived after 30 days. 0 = off.",
           "include_github_issues": "Search home-assistant/core for open issues filed since the release and labelled with an integration you use. Shown in the report and used by the AI to weigh risk."
         }
       }

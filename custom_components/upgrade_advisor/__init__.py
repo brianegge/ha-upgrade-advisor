@@ -13,7 +13,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 
 from .analyzer import (
     AnalysisResult,
@@ -46,6 +50,7 @@ from .community import (
     async_get_core_release_dates,
     async_get_custom_adoption,
     async_get_release_date,
+    deferral_reason,
     earliest_release_in_range,
     format_community_signal,
     format_issues_for_prompt,
@@ -58,6 +63,8 @@ from .const import (
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
     CONF_INCLUDE_ISSUES,
+    CONF_MIN_ADOPTION_PCT,
+    CONF_MIN_RELEASE_AGE_DAYS,
     CONF_POST_UPGRADE_CHECK,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
@@ -66,9 +73,12 @@ from .const import (
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
     DEFAULT_INCLUDE_ISSUES,
+    DEFAULT_MIN_ADOPTION_PCT,
+    DEFAULT_MIN_RELEASE_AGE_DAYS,
     DEFAULT_POST_UPGRADE_CHECK,
     DEFAULT_SCAN_HACS,
     DEFAULT_SCAN_ON_UPDATE,
+    DEFERRED_RECHECK_INTERVAL,
     DOMAIN,
     HA_CORE_UPDATE_ENTITY,
     PLATFORMS,
@@ -102,6 +112,8 @@ class UpgradeAdvisorCoordinator:
         self.breaking_change_count: int = 0
         self.release_age_days: int | None = None
         self.adoption_pct: float | None = None
+        # Updates held back by the release-age / adoption gate, by component.
+        self.deferred: dict[str, dict[str, Any]] = {}
 
         # All reports from the current scan (keyed by component name)
         self.reports: dict[str, AnalysisResult] = {}
@@ -143,7 +155,7 @@ class UpgradeAdvisorCoordinator:
         """The conversation agent to use (options override the initial setup choice)."""
         return self.entry.options.get(CONF_AGENT_ID, self.entry.data[CONF_AGENT_ID])
 
-    async def async_analyze_core_update(self) -> None:
+    async def async_analyze_core_update(self, automatic: bool = False) -> None:
         """Analyze only the HA core update."""
         state = self.hass.states.get(HA_CORE_UPDATE_ENTITY)
         if state is None or state.state != "on":
@@ -162,9 +174,10 @@ class UpgradeAdvisorCoordinator:
             target_version=target,
             repo=None,
             entity_id=HA_CORE_UPDATE_ENTITY,
+            automatic=automatic,
         )
 
-    async def async_analyze_available_update(self) -> None:
+    async def async_analyze_available_update(self, automatic: bool = False) -> None:
         """Analyze all pending updates — HA core and HACS components."""
         self.reports.clear()
         analyzed = False
@@ -182,6 +195,7 @@ class UpgradeAdvisorCoordinator:
                     target_version=target,
                     repo=None,
                     entity_id=HA_CORE_UPDATE_ENTITY,
+                    automatic=automatic,
                 )
                 analyzed = True
 
@@ -196,7 +210,7 @@ class UpgradeAdvisorCoordinator:
                 release_url = update_state.attributes.get("release_url") or ""
                 if "github.com" not in release_url:
                     continue
-                await self.async_analyze_hacs_update(update_state.entity_id)
+                await self.async_analyze_hacs_update(update_state.entity_id, automatic=automatic)
                 analyzed = True
 
         if not analyzed:
@@ -214,7 +228,7 @@ class UpgradeAdvisorCoordinator:
             entity_id=None,
         )
 
-    async def async_analyze_hacs_update(self, entity_id: str) -> None:
+    async def async_analyze_hacs_update(self, entity_id: str, automatic: bool = False) -> None:
         """Analyze a HACS component update."""
         state = self.hass.states.get(entity_id)
         if state is None or state.state != "on":
@@ -238,6 +252,7 @@ class UpgradeAdvisorCoordinator:
             target_version=target,
             repo=repo,
             entity_id=entity_id,
+            automatic=automatic,
         )
 
     async def _run_two_phase_analysis(
@@ -391,9 +406,20 @@ class UpgradeAdvisorCoordinator:
         target_version: str,
         repo: str | None,
         entity_id: str | None = None,
+        automatic: bool = False,
     ) -> None:
-        """Run the full analysis pipeline, one analysis at a time."""
+        """Run the full analysis pipeline, one analysis at a time.
+
+        Automatic runs (update entity changes, startup scan, deferred
+        re-checks) honour the release-age / adoption gate; manual service
+        calls always analyze immediately.
+        """
         async with self._analysis_lock:
+            if automatic and await self._async_defer_if_too_new(
+                component_name, current_version, target_version, repo, entity_id
+            ):
+                return
+            self.deferred.pop(component_name, None)
             await self._run_analysis_pipeline(
                 upgrade_type, component_name, current_version, target_version, repo, entity_id
             )
@@ -484,12 +510,59 @@ class UpgradeAdvisorCoordinator:
 
         self._async_notify_listeners()
 
+    async def _async_defer_if_too_new(
+        self,
+        component_name: str,
+        current_version: str,
+        target_version: str,
+        repo: str | None,
+        entity_id: str | None,
+    ) -> bool:
+        """Hold back an automatic analysis until the release is old / adopted enough."""
+        min_age = int(self._get_option(CONF_MIN_RELEASE_AGE_DAYS, DEFAULT_MIN_RELEASE_AGE_DAYS) or 0)
+        min_adoption = float(self._get_option(CONF_MIN_ADOPTION_PCT, DEFAULT_MIN_ADOPTION_PCT) or 0)
+        if min_age <= 0 and min_adoption <= 0:
+            return False
+
+        session: ClientSession = async_get_clientsession(self.hass)
+        signal = await self._async_get_community_signal(
+            session, repo, current_version, target_version, include_issues=False
+        )
+        reason = deferral_reason(signal, min_age, min_adoption)
+        if reason is None:
+            return False
+
+        _LOGGER.info("Deferring analysis of %s %s: %s", component_name, target_version, reason)
+        self.deferred[component_name] = {
+            "entity_id": entity_id,
+            "target_version": target_version,
+            "reason": reason,
+        }
+        self._async_notify_listeners()
+        return True
+
+    async def async_recheck_deferred(self) -> None:
+        """Re-run the gate for deferred updates; analyze the ones now ready."""
+        for component_name, info in list(self.deferred.items()):
+            entity_id = info.get("entity_id")
+            state = self.hass.states.get(entity_id) if entity_id else None
+            if state is None or state.state != "on":
+                # Installed, skipped or withdrawn meanwhile
+                self.deferred.pop(component_name, None)
+                continue
+            if entity_id == HA_CORE_UPDATE_ENTITY:
+                await self.async_analyze_core_update(automatic=True)
+            else:
+                await self.async_analyze_hacs_update(entity_id, automatic=True)
+        self._async_notify_listeners()
+
     async def _async_get_community_signal(
         self,
         session: ClientSession,
         repo: str | None,
         current_version: str,
         target_version: str,
+        include_issues: bool = True,
     ) -> CommunitySignal:
         """Best-effort release age and adoption for the target version."""
         signal = CommunitySignal()
@@ -498,7 +571,7 @@ class UpgradeAdvisorCoordinator:
                 dates = await async_get_core_release_dates(session)
                 signal.release_date = dates.get(target_version)
                 signal.adoption = await async_get_core_adoption(session, target_version)
-                if self._get_option(CONF_INCLUDE_ISSUES, DEFAULT_INCLUDE_ISSUES):
+                if include_issues and self._get_option(CONF_INCLUDE_ISSUES, DEFAULT_INCLUDE_ISSUES):
                     first = earliest_release_in_range(dates, current_version, target_version)
                     if first is not None:
                         signal.issues_since, since = first
@@ -897,7 +970,7 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
             return
         scan_on_update = entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
         if scan_on_update:
-            hass.async_create_task(coordinator.async_analyze_core_update())
+            hass.async_create_task(coordinator.async_analyze_core_update(automatic=True))
 
     @callback
     def _on_any_state_change(event: Event) -> None:
@@ -917,10 +990,16 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
         if "github.com" not in release_url:
             return
         if entry.options.get(CONF_SCAN_HACS, DEFAULT_SCAN_HACS):
-            hass.async_create_task(coordinator.async_analyze_hacs_update(entity_id))
+            hass.async_create_task(coordinator.async_analyze_hacs_update(entity_id, automatic=True))
 
     entry.async_on_unload(async_track_state_change_event(hass, [HA_CORE_UPDATE_ENTITY], _on_update_available))
     entry.async_on_unload(hass.bus.async_listen("state_changed", _on_any_state_change))
+
+    async def _recheck_deferred(_now: Any = None) -> None:
+        if coordinator.deferred:
+            await coordinator.async_recheck_deferred()
+
+    entry.async_on_unload(async_track_time_interval(hass, _recheck_deferred, DEFERRED_RECHECK_INTERVAL))
 
     async def _run_startup_scan(_now: Any = None) -> None:
         """Run a single sequential scan of all pending updates."""
@@ -933,7 +1012,7 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
             except Exception:
                 _LOGGER.exception("Post-upgrade scan raised")
         if entry.options.get(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE):
-            await coordinator.async_analyze_available_update()
+            await coordinator.async_analyze_available_update(automatic=True)
         startup_complete = True
 
     @callback

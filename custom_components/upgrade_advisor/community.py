@@ -16,7 +16,7 @@ from typing import Any
 
 from aiohttp import ClientSession, ClientTimeout
 
-from .const import GITHUB_API_BASE, HA_CORE_REPO
+from .const import ADOPTION_GATE_MAX_AGE_DAYS, GITHUB_API_BASE, HA_CORE_REPO
 from .github import _is_version_between, _version_tuple
 from .sanitize import strip_markup
 
@@ -311,6 +311,34 @@ def format_issues_for_prompt(signal: CommunitySignal) -> str:
             f"({issue.reactions} reactions, {issue.comments} comments)"
         )
     return "\n".join(lines)
+
+
+def deferral_reason(
+    signal: CommunitySignal,
+    min_age_days: int,
+    min_adoption_pct: float,
+    now: datetime | None = None,
+) -> str | None:
+    """Why an automatic analysis should wait, or None if it can run now.
+
+    Fails open: an unknown release date or missing adoption data never
+    blocks. The adoption threshold is waived once the release is
+    ADOPTION_GATE_MAX_AGE_DAYS old, so low-install integrations still get
+    analyzed eventually.
+    """
+    reasons: list[str] = []
+    age = signal.release_age_days(now)
+    if min_age_days > 0 and age is not None and age < min_age_days:
+        reasons.append(f"released {age} of {min_age_days} days ago")
+    adoption = signal.adoption
+    if (
+        min_adoption_pct > 0
+        and adoption is not None
+        and adoption.pct < min_adoption_pct
+        and (age is None or age < ADOPTION_GATE_MAX_AGE_DAYS)
+    ):
+        reasons.append(f"adoption {adoption.pct:g}% below {min_adoption_pct:g}%")
+    return "; ".join(reasons) or None
 
 
 def format_community_signal(signal: CommunitySignal, target_version: str, now: datetime | None = None) -> str:

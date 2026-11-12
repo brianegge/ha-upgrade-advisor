@@ -8,7 +8,14 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.selector import SelectOptionDict, SelectSelector, SelectSelectorConfig
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+)
 
 from .const import (
     CONF_AGENT_ID,
@@ -17,6 +24,8 @@ from .const import (
     CONF_INCLUDE_ADDONS,
     CONF_INCLUDE_AUTOMATIONS,
     CONF_INCLUDE_ISSUES,
+    CONF_MIN_ADOPTION_PCT,
+    CONF_MIN_RELEASE_AGE_DAYS,
     CONF_POST_UPGRADE_CHECK,
     CONF_SCAN_HACS,
     CONF_SCAN_ON_UPDATE,
@@ -25,6 +34,8 @@ from .const import (
     DEFAULT_INCLUDE_ADDONS,
     DEFAULT_INCLUDE_AUTOMATIONS,
     DEFAULT_INCLUDE_ISSUES,
+    DEFAULT_MIN_ADOPTION_PCT,
+    DEFAULT_MIN_RELEASE_AGE_DAYS,
     DEFAULT_POST_UPGRADE_CHECK,
     DEFAULT_SCAN_HACS,
     DEFAULT_SCAN_ON_UPDATE,
@@ -136,6 +147,22 @@ class UpgradeAdvisorOptionsFlow(config_entries.OptionsFlow):
                         CONF_SCAN_HACS,
                         default=self.config_entry.options.get(CONF_SCAN_HACS, DEFAULT_SCAN_HACS),
                     ): bool,
+                    vol.Required(
+                        CONF_MIN_RELEASE_AGE_DAYS,
+                        default=self.config_entry.options.get(CONF_MIN_RELEASE_AGE_DAYS, DEFAULT_MIN_RELEASE_AGE_DAYS),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0, max=30, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="days"
+                        )
+                    ),
+                    vol.Required(
+                        CONF_MIN_ADOPTION_PCT,
+                        default=self.config_entry.options.get(CONF_MIN_ADOPTION_PCT, DEFAULT_MIN_ADOPTION_PCT),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0, max=100, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="%"
+                        )
+                    ),
                     vol.Required(
                         CONF_POST_UPGRADE_CHECK,
                         default=self.config_entry.options.get(CONF_POST_UPGRADE_CHECK, DEFAULT_POST_UPGRADE_CHECK),

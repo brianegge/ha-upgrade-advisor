@@ -83,6 +83,8 @@ Go to **Settings > Integrations > Upgrade Advisor > Configure**:
 | Conversation agent | (from setup) | The AI agent used for analysis — change it here any time |
 | Analyze on update available | On | Auto-analyze when updates appear |
 | Analyze HACS updates | On | Include HACS component updates |
+| Wait days after release | 0 | Hold automatic analysis until the release is this many days old |
+| Wait for adoption % | 0 | Hold automatic analysis until this share of installs runs the new version |
 | Create repair issues | On | Create repairs for breaking changes |
 | Include automations | On | Send automation list to AI for context |
 | Include add-ons | On | Send add-on list to AI for context |
@@ -143,6 +145,15 @@ Your AI agent sees the same list. An issue that describes a regression in someth
 
 This uses GitHub's unauthenticated search API (about five requests per Core analysis). HACS repositories are not searched yet, because their unauthenticated limits are much tighter. Turn it off with **Include open GitHub bug reports**.
 
+### Waiting for the community to go first
+
+Like Renovate's `minimumReleaseAge`, you can hold automatic analysis back until a release has had time to collect bug reports:
+
+- **Wait days after release** — e.g. `3` analyzes a release three days after it was published.
+- **Wait for adoption %** — e.g. `10` waits until 10% of reporting installs run the new version or newer. It is waived once a release is 30 days old, so integrations with few reporting installs are not held back forever.
+
+Held-back updates are listed in the status sensor's `deferred_updates` attribute and re-checked every 3 hours. The gate fails open: if the release date or adoption data can't be fetched, the analysis runs. Calling `upgrade_advisor.analyze` or `analyze_version` always runs immediately.
+
 Nothing about your installation is sent to fetch any of this: the analytics files are downloaded whole, and the issue search only names the date. Matching against your integrations happens locally.
 
 ## What Is Sent to Your AI Agent
@@ -188,6 +199,7 @@ Release notes are third-party text and are treated as untrusted input end to end
 - `breaking_change_count` — number of verified breaking changes
 - `release_age_days` — days since the latest analyzed version was released (when known)
 - `adoption_pct` — percent of reporting installs on that version or newer (when known)
+- `deferred_updates` — updates held back by the release-age / adoption options, with the reason
 - `report` — full report (markdown), including all analyzed components
 
 ## Services

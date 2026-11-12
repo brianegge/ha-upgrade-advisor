@@ -84,6 +84,11 @@ class UpgradeAdvisorStatusSensor(UpgradeAdvisorSensorBase):
             attrs["release_age_days"] = self.coordinator.release_age_days
         if getattr(self.coordinator, "adoption_pct", None) is not None:
             attrs["adoption_pct"] = self.coordinator.adoption_pct
+        deferred = getattr(self.coordinator, "deferred", None)
+        if deferred:
+            attrs["deferred_updates"] = {
+                name: f"{info['target_version']}: {info['reason']}" for name, info in deferred.items()
+            }
         if self.coordinator.report:
             attrs["report"] = self.coordinator.report
         if getattr(self.coordinator, "post_upgrade_report", None):
