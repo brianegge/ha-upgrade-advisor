@@ -17,7 +17,13 @@ from typing import Any
 from aiohttp import ClientSession, ClientTimeout
 
 from .const import ADOPTION_GATE_MAX_AGE_DAYS, GITHUB_API_BASE, HA_CORE_REPO
-from .github import _is_version_between, _version_tuple
+from .github import (
+    _is_version_between,
+    _version_tuple,
+    async_get_release_with_v_fallback,
+    async_list_core_releases,
+    is_stable_core_tag,
+)
 from .sanitize import strip_markup
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,8 +32,10 @@ ANALYTICS_CORE_URL = "https://analytics.home-assistant.io/current_data.json"
 ANALYTICS_CUSTOM_URL = "https://analytics.home-assistant.io/custom_integrations.json"
 
 _TIMEOUT = ClientTimeout(total=30)
-# Analytics is regenerated roughly daily; refetching more often wastes bandwidth.
-_CACHE_TTL_SECONDS = 6 * 3600
+# Analytics is regenerated roughly daily. Cache long enough to cover a scan
+# of several updates plus the deferral gate, then let it go: only the slimmed
+# {version: count} maps are kept, and expired entries are evicted on access.
+_CACHE_TTL_SECONDS = 3600
 _cache: dict[str, tuple[float, Any]] = {}
 
 GITHUB_SEARCH_URL = f"{GITHUB_API_BASE}/search/issues"
@@ -39,8 +47,10 @@ _MAX_ISSUE_PAGES = 5
 _MAX_TITLE_CHARS = 120
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_\[\]<>|#~])")
 
-# Version strings we don't count toward adoption (betas, dev builds, local forks).
-_PRERELEASE_RE = re.compile(r"(a|b|rc|dev|beta|alpha|\+)", re.IGNORECASE)
+# Version strings we don't count toward adoption: betas/RCs/dev builds
+# ("2026.12.0b1", "1.0.0rc2"), hyphenated pre-releases ("5.7.11-beta1") and
+# local builds ("1.1.0+local1").
+_PRERELEASE_RE = re.compile(r"(?:a|b|rc|dev|alpha|beta)\d*$|[-+]", re.IGNORECASE)
 
 
 @dataclass
@@ -93,38 +103,69 @@ def _clear_cache() -> None:
     _cache.clear()
 
 
-async def _async_get_json_cached(session: ClientSession, url: str) -> Any | None:
-    """Fetch JSON with an in-memory TTL cache."""
-    cached = _cache.get(url)
-    if cached is not None and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS:
-        return cached[1]
+def _slim_core(data: Any) -> dict[str, int] | None:
+    """Keep only the Core {version: count} map from current_data.json."""
+    if not isinstance(data, dict) or not isinstance(data.get("versions"), dict):
+        return None
+    return data["versions"]
+
+
+def _slim_custom(data: Any) -> dict[str, dict[str, int]] | None:
+    """Keep only {domain: {version: count}} from custom_integrations.json."""
+    if not isinstance(data, dict):
+        return None
+    return {
+        domain: entry["versions"]
+        for domain, entry in data.items()
+        if isinstance(entry, dict) and isinstance(entry.get("versions"), dict)
+    }
+
+
+async def _async_get_json_cached(session: ClientSession, url: str, slim: Any) -> Any | None:
+    """Fetch JSON, reduce it with `slim`, and cache the reduced form for a while."""
+    now = time.monotonic()
+    for key in [k for k, (stamp, _) in _cache.items() if now - stamp >= _CACHE_TTL_SECONDS]:
+        del _cache[key]
+    if url in _cache:
+        return _cache[url][1]
     try:
         async with session.get(url, timeout=_TIMEOUT) as resp:
             resp.raise_for_status()
-            data = await resp.json(content_type=None)
+            data = slim(await resp.json(content_type=None))
     except Exception:
         _LOGGER.warning("Failed to fetch %s", url, exc_info=True)
         return None
-    _cache[url] = (time.monotonic(), data)
+    if data is not None:
+        _cache[url] = (now, data)
     return data
+
+
+def _padded(version: tuple[int, ...], length: int) -> tuple[int, ...]:
+    """Pad a version tuple with zeros so '2.0' compares equal to '2.0.0'."""
+    return version + (0,) * (length - len(version))
 
 
 def compute_adoption(version_counts: dict[str, int], target_version: str) -> Adoption | None:
     """Compute adoption of target_version from a {version: install_count} map."""
     if not version_counts or not target_version:
         return None
-    target = _version_tuple(target_version)
-    if not target:
+    target_raw = _version_tuple(target_version)
+    if not target_raw:
         return None
     target_installs = 0
     at_or_newer = 0
     total = 0
     for version, count in version_counts.items():
-        if not isinstance(count, int) or _PRERELEASE_RE.search(version.lstrip("v")):
+        if not isinstance(count, int):
             continue
-        parsed = _version_tuple(version)
-        if not parsed:
+        # Skip pre-releases, except the target itself (a HACS beta channel).
+        if version.lstrip("v") != target_version.lstrip("v") and _PRERELEASE_RE.search(version.lstrip("v")):
             continue
+        parsed_raw = _version_tuple(version)
+        if not parsed_raw:
+            continue
+        length = max(len(parsed_raw), len(target_raw))
+        parsed, target = _padded(parsed_raw, length), _padded(target_raw, length)
         total += count
         if parsed >= target:
             at_or_newer += count
@@ -137,21 +178,18 @@ def compute_adoption(version_counts: dict[str, int], target_version: str) -> Ado
 
 async def async_get_core_adoption(session: ClientSession, target_version: str) -> Adoption | None:
     """Adoption of a Home Assistant Core version."""
-    data = await _async_get_json_cached(session, ANALYTICS_CORE_URL)
-    if not isinstance(data, dict):
+    versions = await _async_get_json_cached(session, ANALYTICS_CORE_URL, _slim_core)
+    if not versions:
         return None
-    return compute_adoption(data.get("versions") or {}, target_version)
+    return compute_adoption(versions, target_version)
 
 
 async def async_get_custom_adoption(session: ClientSession, domain: str, target_version: str) -> Adoption | None:
     """Adoption of a custom (HACS) integration version, by integration domain."""
-    data = await _async_get_json_cached(session, ANALYTICS_CUSTOM_URL)
-    if not isinstance(data, dict):
+    domains = await _async_get_json_cached(session, ANALYTICS_CUSTOM_URL, _slim_custom)
+    if not domains or domain not in domains:
         return None
-    entry = data.get(domain)
-    if not isinstance(entry, dict):
-        return None
-    return compute_adoption(entry.get("versions") or {}, target_version)
+    return compute_adoption(domains[domain], target_version)
 
 
 def _parse_github_date(value: str | None) -> datetime | None:
@@ -164,41 +202,29 @@ def _parse_github_date(value: str | None) -> datetime | None:
 
 
 async def async_get_release_date(session: ClientSession, repo: str, tag: str) -> datetime | None:
-    """Publish date of a GitHub release, trying the tag with and without a 'v' prefix."""
-    candidates = [tag] if tag.startswith("v") else [tag, f"v{tag}"]
-    for candidate in candidates:
-        url = f"{GITHUB_API_BASE}/repos/{repo}/releases/tags/{candidate}"
-        try:
-            async with session.get(url, timeout=_TIMEOUT) as resp:
-                if resp.status == 404:
-                    continue
-                resp.raise_for_status()
-                data = await resp.json()
-        except Exception:
-            _LOGGER.debug("Failed to fetch release date for %s %s", repo, candidate, exc_info=True)
-            return None
-        return _parse_github_date(data.get("published_at") or data.get("created_at"))
-    return None
+    """Publish date of a GitHub release, trying the tag with and without a 'v' prefix.
+
+    Shares the cached release payload with the release-notes fetch.
+    """
+    release = await async_get_release_with_v_fallback(session, repo, tag)
+    if release is None:
+        return None
+    return _parse_github_date(release.get("published_at") or release.get("created_at"))
 
 
 async def async_get_core_release_dates(session: ClientSession) -> dict[str, datetime]:
-    """Publish dates of recent stable Home Assistant Core releases, keyed by tag."""
-    url = f"{GITHUB_API_BASE}/repos/{HA_CORE_REPO}/releases?per_page=100"
-    try:
-        async with session.get(url, timeout=_TIMEOUT) as resp:
-            resp.raise_for_status()
-            releases = await resp.json()
-    except Exception:
-        _LOGGER.debug("Failed to list HA core releases", exc_info=True)
-        return {}
+    """Publish dates of recent stable Home Assistant Core releases, keyed by tag.
+
+    Shares the cached release list with the release-notes fetch.
+    """
+    releases = await async_list_core_releases(session) or []
     dates: dict[str, datetime] = {}
-    for release in releases if isinstance(releases, list) else []:
-        if release.get("prerelease"):
+    for release in releases:
+        if not is_stable_core_tag(release):
             continue
-        tag = release.get("tag_name") or ""
         date = _parse_github_date(release.get("published_at"))
-        if tag and date:
-            dates[tag] = date
+        if date:
+            dates[release["tag_name"]] = date
     return dates
 
 
@@ -227,7 +253,13 @@ async def async_find_custom_integration_domain(hass: Any, repo: str) -> str | No
 
 
 def earliest_release_in_range(dates: dict[str, datetime], current: str, target: str) -> tuple[str, datetime] | None:
-    """The first release after `current` up to `target` — when regressions could start appearing."""
+    """The first release after `current` up to `target` — when regressions could start appearing.
+
+    With an unknown installed version, only the target release itself is
+    used, so the search never reaches back across months of releases.
+    """
+    if not _version_tuple(current):
+        return (target, dates[target]) if target in dates else None
     in_range = [(tag, date) for tag, date in dates.items() if _is_version_between(tag, current, target)]
     if not in_range:
         return (target, dates[target]) if target in dates else None
@@ -371,7 +403,8 @@ def insert_before_footer(report: str, block: str) -> str:
     """Insert a block above the RISK_LEVEL/BREAKING_CHANGES footer (or append)."""
     if not block:
         return report
-    match = re.search(r"^RISK_LEVEL:", report, re.MULTILINE)
+    # Matches the same footer parse_response accepts, including "**RISK_LEVEL:**".
+    match = re.search(r"^[^\w\n]*RISK_LEVEL\s*:", report, re.MULTILINE | re.IGNORECASE)
     if match is None:
         return f"{report.rstrip()}\n\n{block}"
     head = report[: match.start()].rstrip()

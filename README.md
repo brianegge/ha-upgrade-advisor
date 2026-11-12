@@ -197,8 +197,8 @@ Release notes are third-party text and are treated as untrusted input end to end
 - `available_version` — target version
 - `last_analysis` — timestamp of last report
 - `breaking_change_count` — number of verified breaking changes
-- `release_age_days` — days since the latest analyzed version was released (when known)
-- `adoption_pct` — percent of reporting installs on that version or newer (when known)
+- `release_age_days` — days since the most recently analyzed component's target version was released, as of that analysis (when known)
+- `adoption_pct` — percent of reporting installs on that version or newer, as of that analysis (when known)
 - `deferred_updates` — updates held back by the release-age / adoption options, with the reason
 - `report` — full report (markdown), including all analyzed components
 

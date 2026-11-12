@@ -112,7 +112,8 @@ class UpgradeAdvisorCoordinator:
         self.breaking_change_count: int = 0
         self.release_age_days: int | None = None
         self.adoption_pct: float | None = None
-        # Updates held back by the release-age / adoption gate, by component.
+        # Updates held back by the release-age / adoption gate, keyed by
+        # update entity_id (friendly names are not unique).
         self.deferred: dict[str, dict[str, Any]] = {}
 
         # All reports from the current scan (keyed by component name)
@@ -179,7 +180,10 @@ class UpgradeAdvisorCoordinator:
 
     async def async_analyze_available_update(self, automatic: bool = False) -> None:
         """Analyze all pending updates — HA core and HACS components."""
-        self.reports.clear()
+        # Pending component -> target version. Reports for anything else are
+        # pruned after the scan (not before it, so an update the gate holds
+        # back doesn't leave the combined report half-rebuilt).
+        pending: dict[str, str] = {}
         analyzed = False
 
         # HA core update
@@ -188,6 +192,7 @@ class UpgradeAdvisorCoordinator:
             current = state.attributes.get("installed_version", "")
             target = state.attributes.get("latest_version", "")
             if target:
+                pending["Home Assistant"] = target
                 await self._run_analysis(
                     upgrade_type="Home Assistant Core",
                     component_name="Home Assistant",
@@ -210,11 +215,22 @@ class UpgradeAdvisorCoordinator:
                 release_url = update_state.attributes.get("release_url") or ""
                 if "github.com" not in release_url:
                     continue
+                name = update_state.attributes.get("friendly_name", update_state.entity_id)
+                pending[name] = update_state.attributes.get("latest_version", "")
                 await self.async_analyze_hacs_update(update_state.entity_id, automatic=automatic)
                 analyzed = True
 
         if not analyzed:
             _LOGGER.debug("No updates available to analyze")
+
+        # Drop reports for updates no longer pending (installed or skipped)
+        # and for older targets of an update that is now held back.
+        stale = [name for name, r in self.reports.items() if pending.get(name) != r.target_version]
+        for name in stale:
+            del self.reports[name]
+        if stale:
+            self._rebuild_summary()
+            self._async_notify_listeners()
 
     async def async_analyze_version(self, version: str) -> None:
         """Analyze a specific HA version."""
@@ -419,7 +435,7 @@ class UpgradeAdvisorCoordinator:
                 component_name, current_version, target_version, repo, entity_id
             ):
                 return
-            self.deferred.pop(component_name, None)
+            self.deferred.pop(entity_id or component_name, None)
             await self._run_analysis_pipeline(
                 upgrade_type, component_name, current_version, target_version, repo, entity_id
             )
@@ -533,7 +549,8 @@ class UpgradeAdvisorCoordinator:
             return False
 
         _LOGGER.info("Deferring analysis of %s %s: %s", component_name, target_version, reason)
-        self.deferred[component_name] = {
+        self.deferred[entity_id or component_name] = {
+            "component_name": component_name,
             "entity_id": entity_id,
             "target_version": target_version,
             "reason": reason,
@@ -543,14 +560,21 @@ class UpgradeAdvisorCoordinator:
 
     async def async_recheck_deferred(self) -> None:
         """Re-run the gate for deferred updates; analyze the ones now ready."""
-        for component_name, info in list(self.deferred.items()):
+        scan_on_update = self._get_option(CONF_SCAN_ON_UPDATE, DEFAULT_SCAN_ON_UPDATE)
+        scan_hacs = self._get_option(CONF_SCAN_HACS, DEFAULT_SCAN_HACS)
+        for key, info in list(self.deferred.items()):
             entity_id = info.get("entity_id")
             state = self.hass.states.get(entity_id) if entity_id else None
-            if state is None or state.state != "on":
-                # Installed, skipped or withdrawn meanwhile
-                self.deferred.pop(component_name, None)
+            is_core = entity_id == HA_CORE_UPDATE_ENTITY
+            if (
+                state is None
+                or state.state != "on"  # installed, skipped or withdrawn meanwhile
+                or not scan_on_update  # automatic analysis turned off since deferral
+                or (not is_core and not scan_hacs)
+            ):
+                self.deferred.pop(key, None)
                 continue
-            if entity_id == HA_CORE_UPDATE_ENTITY:
+            if is_core:
                 await self.async_analyze_core_update(automatic=True)
             else:
                 await self.async_analyze_hacs_update(entity_id, automatic=True)
@@ -616,9 +640,18 @@ class UpgradeAdvisorCoordinator:
         """Store analysis results on the coordinator."""
         # Store per-component
         self.reports[result.component_name] = result
-
-        # Update summary state from all reports
         self.last_analysis = datetime.now(tz=UTC).isoformat()
+        self._rebuild_summary()
+
+        # Track latest component for version display
+        self.current_version = result.current_version
+        self.available_version = result.target_version
+        community = result.community
+        self.release_age_days = community.release_age_days() if community else None
+        self.adoption_pct = community.adoption.pct if community and community.adoption else None
+
+    def _rebuild_summary(self) -> None:
+        """Recompute combined risk, breaking count and report from self.reports."""
         total_breaking = sum(r.breaking_change_count for r in self.reports.values() if not r.error)
         self.breaking_change_count = total_breaking
 
@@ -638,14 +671,7 @@ class UpgradeAdvisorCoordinator:
                 sections.append(f'<a id="{anchor}"></a>\n\n# {name}\n\nError: {describe_agent_error(r.error)}')
             else:
                 sections.append(f'<a id="{anchor}"></a>\n\n{r.report}')
-        self.report = "\n\n---\n\n".join(sections)
-
-        # Track latest component for version display
-        self.current_version = result.current_version
-        self.available_version = result.target_version
-        community = result.community
-        self.release_age_days = community.release_age_days() if community else None
-        self.adoption_pct = community.adoption.pct if community and community.adoption else None
+        self.report = "\n\n---\n\n".join(sections) or None
 
     async def _async_output_results(self, result: AnalysisResult) -> None:
         """Create notifications, repair issues, and fire events."""

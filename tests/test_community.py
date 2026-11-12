@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.upgrade_advisor import community
+from custom_components.upgrade_advisor import community, github
 from custom_components.upgrade_advisor.community import (
     ANALYTICS_CORE_URL,
     ANALYTICS_CUSTOM_URL,
@@ -64,8 +64,10 @@ class FakeSession:
 @pytest.fixture(autouse=True)
 def _clear_cache():
     community._clear_cache()
+    github._clear_release_cache()
     yield
     community._clear_cache()
+    github._clear_release_cache()
 
 
 def test_compute_adoption_counts_target_and_newer() -> None:
@@ -81,6 +83,18 @@ def test_compute_adoption_ignores_prerelease_and_local_builds() -> None:
     assert adoption is not None
     assert adoption.total == 20
     assert adoption.pct == 50.0
+
+
+def test_compute_adoption_pads_short_versions() -> None:
+    # Analytics reporting "2.0" counts toward a "2.0.0" target
+    adoption = compute_adoption({"2.0": 3, "1.9": 1}, "2.0.0")
+    assert adoption is not None and adoption.at_or_newer == 3
+
+
+def test_compute_adoption_counts_prerelease_target() -> None:
+    adoption = compute_adoption({"2.0.0b1": 2, "2.0.0b0": 5, "1.9.0": 2}, "2.0.0b1")
+    assert adoption is not None
+    assert adoption.target_installs == 2 and adoption.total == 4
 
 
 def test_compute_adoption_handles_empty() -> None:
@@ -116,6 +130,8 @@ def test_insert_before_footer() -> None:
     out = insert_before_footer(report, "BLOCK")
     assert out == "## X\n\nVerdict\n\nBLOCK\n\nRISK_LEVEL: Low\nBREAKING_CHANGES: 0"
     assert insert_before_footer("## X", "BLOCK") == "## X\n\nBLOCK"
+    bold = "## X\n\n**RISK_LEVEL:** Medium\n**BREAKING_CHANGES:** 1"
+    assert insert_before_footer(bold, "BLOCK") == "## X\n\nBLOCK\n\n**RISK_LEVEL:** Medium\n**BREAKING_CHANGES:** 1"
     assert insert_before_footer("## X", "") == "## X"
 
 
@@ -131,6 +147,20 @@ async def test_core_adoption_fetch_is_cached() -> None:
 async def test_core_adoption_fetch_failure_returns_none() -> None:
     session = FakeSession({ANALYTICS_CORE_URL: (500, {})})
     assert await async_get_core_adoption(session, "2026.11.0") is None
+    # Failures are not cached
+    session.routes[ANALYTICS_CORE_URL] = (200, {"versions": {"2026.11.0": 1}})
+    assert await async_get_core_adoption(session, "2026.11.0") is not None
+
+
+async def test_analytics_cache_keeps_only_version_maps_and_expires() -> None:
+    session = FakeSession(
+        {ANALYTICS_CUSTOM_URL: (200, {"a": {"total": 1, "versions": {"1.0": 1}}, "junk": 5, "b": {"total": 0}})}
+    )
+    await async_get_custom_adoption(session, "a", "1.0")
+    assert community._cache[ANALYTICS_CUSTOM_URL][1] == {"a": {"1.0": 1}}
+    with patch.object(community.time, "monotonic", return_value=community.time.monotonic() + 7200):
+        await async_get_custom_adoption(session, "a", "1.0")
+    assert len(session.calls) == 2
 
 
 async def test_custom_adoption_by_domain() -> None:
@@ -151,6 +181,38 @@ async def test_release_date_tries_v_prefix() -> None:
     date = await async_get_release_date(session, "o/r", "1.2.0")
     assert date == datetime(2026, 11, 5, 10, tzinfo=UTC)
     assert session.calls[0].endswith("/tags/1.2.0")
+
+
+async def test_release_date_shares_cache_with_release_notes() -> None:
+    session = FakeSession(
+        {
+            "https://api.github.com/repos/o/r/releases/tags/v1.2.0": (
+                200,
+                {"published_at": "2026-11-05T10:00:00Z", "body": "notes"},
+            ),
+        }
+    )
+    assert await github.async_get_hacs_release_notes(session, "o/r", "1.2.0") == "notes"
+    calls = len(session.calls)
+    assert await async_get_release_date(session, "o/r", "1.2.0") is not None
+    assert len(session.calls) == calls
+
+
+async def test_core_release_list_shared_and_beta_tags_skipped() -> None:
+    session = FakeSession(
+        {
+            "https://api.github.com/repos/home-assistant/core/releases": (
+                200,
+                [
+                    {"tag_name": "2026.11.1", "published_at": "2026-11-07T00:00:00Z", "body": "fix"},
+                    {"tag_name": "2026.12.0b0", "published_at": "2026-11-26T00:00:00Z"},
+                ],
+            )
+        }
+    )
+    assert "fix" in await github.async_get_ha_release_notes_range(session, "2026.11.0", "2026.11.1")
+    assert list(await async_get_core_release_dates(session)) == ["2026.11.1"]
+    assert len(session.calls) == 1
 
 
 async def test_release_date_missing() -> None:
@@ -285,6 +347,8 @@ def test_earliest_release_in_range() -> None:
     assert community.earliest_release_in_range(d, "2026.10.4", "2026.11.1") == ("2026.11.0", d["2026.11.0"])
     assert community.earliest_release_in_range(d, "2026.11.0", "2026.11.1") == ("2026.11.1", d["2026.11.1"])
     assert community.earliest_release_in_range({}, "1", "2") is None
+    # Unknown installed version: only the target release, never a months-old backlog
+    assert community.earliest_release_in_range(d, "", "2026.11.1") == ("2026.11.1", d["2026.11.1"])
 
 
 def test_issue_titles_are_escaped() -> None:

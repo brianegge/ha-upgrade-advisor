@@ -87,7 +87,8 @@ class UpgradeAdvisorStatusSensor(UpgradeAdvisorSensorBase):
         deferred = getattr(self.coordinator, "deferred", None)
         if deferred:
             attrs["deferred_updates"] = {
-                name: f"{info['target_version']}: {info['reason']}" for name, info in deferred.items()
+                info.get("component_name", key): f"{info['target_version']}: {info['reason']}"
+                for key, info in deferred.items()
             }
         if self.coordinator.report:
             attrs["report"] = self.coordinator.report
