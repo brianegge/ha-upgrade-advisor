@@ -119,10 +119,19 @@ def test_format_community_signal() -> None:
         adoption=Adoption(target_installs=1, at_or_newer=245, total=1000),
     )
     text = format_community_signal(signal, "2026.11.1", now)
-    assert text == "**Community signal:** released 6 days ago · 24.5% of 1,000 reporting installs on 2026.11.1 or newer"
+    assert text == (
+        "**Community signal:** released 6 days ago · 24.5% of 1,000 reporting installs on `2026.11.1` or newer"
+    )
     assert "released today" in format_community_signal(CommunitySignal(release_date=now), "1", now)
     assert "1 day ago" in format_community_signal(CommunitySignal(release_date=now - timedelta(days=1)), "1", now)
     assert format_community_signal(CommunitySignal(), "1", now) == ""
+
+
+def test_format_community_signal_target_version_is_inert() -> None:
+    signal = CommunitySignal(adoption=Adoption(target_installs=1, at_or_newer=1, total=10))
+    text = format_community_signal(signal, "1.0.0 `![x](https://evil.example/i.png)`\n# hi")
+    assert "on `1.0.0 ![x](https://evil.example/i.png) # hi` or newer" in text
+    assert "\n" not in text
 
 
 def test_insert_before_footer() -> None:
@@ -295,6 +304,7 @@ def _issue_item(number: int, labels: list[str], reactions: int = 0, comments: in
         "labels": [{"name": name} for name in labels],
         "reactions": {"total_count": reactions},
         "comments": comments,
+        "created_at": "2026-11-06T00:00:00Z",
         **extra,
     }
 
@@ -319,6 +329,26 @@ async def test_core_issues_filters_to_installed_integrations() -> None:
     assert [i.number for i in issues] == [2, 1]
     assert issues[0].integrations == ["hue"]
     assert len(session.calls) == 1
+
+
+async def test_core_issues_respect_release_time_not_just_date() -> None:
+    since = datetime(2026, 11, 5, 18, 0, tzinfo=UTC)
+    items = [
+        _issue_item(1, ["integration: zha"], created_at="2026-11-05T09:00:00Z"),  # same day, before release
+        _issue_item(2, ["integration: zha"], created_at="2026-11-05T18:30:00Z"),
+        _issue_item(3, ["integration: zha"], created_at=None),
+    ]
+    queries: list[str] = []
+
+    class Recording(FakeSession):
+        def get(self, url: str, **kwargs: Any) -> Any:
+            queries.append(kwargs["params"]["q"])
+            return super().get(url, **kwargs)
+
+    session = Recording({SEARCH_PREFIX: (200, {"items": items})})
+    issues = await community.async_get_core_issues(session, since, {"zha"})
+    assert [i.number for i in issues] == [2]
+    assert "created:>=2026-11-05T18:00:00Z" in queries[0]
 
 
 async def test_core_issues_pages_and_limits() -> None:
@@ -354,7 +384,10 @@ def test_earliest_release_in_range() -> None:
 def test_issue_titles_are_escaped() -> None:
     issue = community.CommunityIssue(
         number=9,
-        title="Broken ![x](https://evil.example/i.png) <b>bold</b> [click](https://evil.example) *now*",
+        title=(
+            "Broken ![x](https://evil.example/i.png) <b>bold</b> [click](https://evil.example) *now* "
+            "see https://evil.example/a_b and www.evil.example `code`"
+        ),
         url="https://github.com/home-assistant/core/issues/9",
         reactions=1,
         comments=2,
@@ -365,7 +398,10 @@ def test_issue_titles_are_escaped() -> None:
     assert "evil.example" not in block
     assert "<b>" not in block
     assert "\\*now\\*" in block
-    assert block.startswith("**Open bug reports since 2026.11.0 for your integrations:**\n- [#9](")
+    assert "http" not in block.split("](", 1)[1].split(")", 1)[1]
+    assert "www." not in block
+    assert "code" in block and "\\`" not in block
+    assert block.startswith("**Open bug reports since `2026.11.0` for your integrations:**\n- [#9](")
     assert "1 reaction, 2 comments" in block
     assert community.format_issues_for_prompt(signal).startswith("- #9 [zha] Broken")
     assert community.format_issues_for_prompt(CommunitySignal()) == ""

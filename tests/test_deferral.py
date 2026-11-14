@@ -46,6 +46,8 @@ def test_deferral_reason_both_and_fail_open() -> None:
     assert deferral_reason(_signal(1, 4), 3, 10, NOW) == "released 1 of 3 days ago; adoption 4% below 10%"
     assert deferral_reason(_signal(None, None), 3, 10, NOW) is None
     assert deferral_reason(_signal(0, 0), 0, 0, NOW) is None
+    # Unknown age: the 30-day waiver could never apply, so adoption can't block
+    assert deferral_reason(_signal(None, 4), 0, 10, NOW) is None
 
 
 def _coordinator(hass: HomeAssistant, **options: float) -> UpgradeAdvisorCoordinator:
@@ -76,6 +78,43 @@ async def test_automatic_run_deferred_until_release_is_old_enough(hass: HomeAssi
         await coordinator._run_analysis("Home Assistant Core", "Home Assistant", "1", "2", None, HA_CORE_UPDATE_ENTITY)
         pipeline.assert_awaited_once()
         assert coordinator.deferred == {}
+
+
+async def test_analyze_version_keeps_unrelated_deferral(hass: HomeAssistant) -> None:
+    coordinator = _coordinator(hass)
+    deferral = {
+        "component_name": "Home Assistant",
+        "entity_id": HA_CORE_UPDATE_ENTITY,
+        "target_version": "2026.11.1",
+        "reason": "r",
+    }
+    coordinator.deferred = {HA_CORE_UPDATE_ENTITY: dict(deferral)}
+    with patch.object(coordinator, "_run_analysis_pipeline", AsyncMock()):
+        await coordinator.async_analyze_version("2026.10.4")
+        assert HA_CORE_UPDATE_ENTITY in coordinator.deferred
+        # Analyzing the held-back release itself satisfies the deferral
+        await coordinator.async_analyze_version("2026.11.1")
+        assert coordinator.deferred == {}
+
+
+async def test_component_deferral_prunes_older_report(hass: HomeAssistant) -> None:
+    from custom_components.upgrade_advisor.analyzer import AnalysisResult
+
+    coordinator = _coordinator(hass, **{CONF_MIN_RELEASE_AGE_DAYS: 3})
+    coordinator._store_result(
+        AnalysisResult(report="## core v2", risk_level="high", component_name="Home Assistant", target_version="2")
+    )
+    young = CommunitySignal(release_date=datetime.now(tz=UTC))
+    with patch.object(coordinator, "_async_get_community_signal", AsyncMock(return_value=young)):
+        hass.states.async_set(HA_CORE_UPDATE_ENTITY, "on", {"installed_version": "1", "latest_version": "2"})
+        await coordinator.async_analyze_core_update(automatic=True)
+        assert "Home Assistant" in coordinator.reports  # same target: kept
+
+        hass.states.async_set(HA_CORE_UPDATE_ENTITY, "on", {"installed_version": "1", "latest_version": "3"})
+        await coordinator.async_analyze_core_update(automatic=True)
+    assert coordinator.reports == {}
+    assert coordinator.report is None
+    assert coordinator.risk_level == "unknown"
 
 
 async def test_no_gate_configured_skips_signal_lookup(hass: HomeAssistant) -> None:
@@ -194,4 +233,10 @@ def test_sensor_exposes_deferred_updates() -> None:
     entry = MagicMock()
     entry.entry_id = "abc"
     attrs = UpgradeAdvisorStatusSensor(coordinator, entry).extra_state_attributes
-    assert attrs["deferred_updates"] == {"Home Assistant": "2026.11.1: released 1 of 3 days ago"}
+    assert attrs["deferred_updates"] == {
+        HA_CORE_UPDATE_ENTITY: {
+            "name": "Home Assistant",
+            "target_version": "2026.11.1",
+            "reason": "released 1 of 3 days ago",
+        }
+    }

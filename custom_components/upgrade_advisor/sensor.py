@@ -86,8 +86,13 @@ class UpgradeAdvisorStatusSensor(UpgradeAdvisorSensorBase):
             attrs["adoption_pct"] = self.coordinator.adoption_pct
         deferred = getattr(self.coordinator, "deferred", None)
         if deferred:
+            # Keyed by entity_id: friendly names are not unique.
             attrs["deferred_updates"] = {
-                info.get("component_name", key): f"{info['target_version']}: {info['reason']}"
+                key: {
+                    "name": info.get("component_name", key),
+                    "target_version": info["target_version"],
+                    "reason": info["reason"],
+                }
                 for key, info in deferred.items()
             }
         if self.coordinator.report:

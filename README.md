@@ -150,7 +150,7 @@ This uses GitHub's unauthenticated search API (about five requests per Core anal
 Like Renovate's `minimumReleaseAge`, you can hold automatic analysis back until a release has had time to collect bug reports:
 
 - **Wait days after release** — e.g. `3` analyzes a release three days after it was published.
-- **Wait for adoption %** — e.g. `10` waits until 10% of reporting installs run the new version or newer. It is waived once a release is 30 days old, so integrations with few reporting installs are not held back forever.
+- **Wait for adoption %** — e.g. `10` waits until 10% of reporting installs run the new version or newer. It is waived once a release is 30 days old, so integrations with few reporting installs are not held back forever, and skipped when the release date is unknown (e.g. a repo that tags without GitHub Releases).
 
 Held-back updates are listed in the status sensor's `deferred_updates` attribute and re-checked every 3 hours. The gate fails open: if the release date or adoption data can't be fetched, the analysis runs. Calling `upgrade_advisor.analyze` or `analyze_version` always runs immediately.
 
@@ -199,7 +199,7 @@ Release notes are third-party text and are treated as untrusted input end to end
 - `breaking_change_count` — number of verified breaking changes
 - `release_age_days` — days since the most recently analyzed component's target version was released, as of that analysis (when known)
 - `adoption_pct` — percent of reporting installs on that version or newer, as of that analysis (when known)
-- `deferred_updates` — updates held back by the release-age / adoption options, with the reason
+- `deferred_updates` — updates held back by the release-age / adoption options, keyed by update entity ID, each with `name`, `target_version` and `reason`
 - `report` — full report (markdown), including all analyzed components
 
 ## Services

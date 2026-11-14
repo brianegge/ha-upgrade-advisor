@@ -46,6 +46,8 @@ _MAX_INTEGRATION_LABELS = 3
 _MAX_ISSUE_PAGES = 5
 _MAX_TITLE_CHARS = 120
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_\[\]<>|#~])")
+# Anything a markdown renderer could autolink: scheme URLs and GFM "www." links.
+_TITLE_URL = re.compile(r"\b(?:[a-zA-Z][a-zA-Z0-9+.-]*://|www\.)\S*", re.IGNORECASE)
 
 # Version strings we don't count toward adoption: betas/RCs/dev builds
 # ("2026.12.0b1", "1.0.0rc2"), hyphenated pre-releases ("5.7.11-beta1") and
@@ -266,8 +268,13 @@ def earliest_release_in_range(dates: dict[str, datetime], current: str, target: 
     return min(in_range, key=lambda item: _version_tuple(item[0]))
 
 
-def _issue_from_item(item: dict[str, Any], domains: set[str]) -> CommunityIssue | None:
+def _issue_from_item(item: dict[str, Any], domains: set[str], since: datetime) -> CommunityIssue | None:
     if "pull_request" in item:
+        return None
+    # The search qualifier already filters on the release timestamp; this
+    # also drops anything filed before the release if the API rounds it.
+    created = _parse_github_date(item.get("created_at"))
+    if created is None or created < since:
         return None
     labels = [label.get("name", "") for label in item.get("labels") or [] if isinstance(label, dict)]
     integrations = [name[len(_INTEGRATION_LABEL) :] for name in labels if name.startswith(_INTEGRATION_LABEL)]
@@ -300,7 +307,10 @@ async def async_get_core_issues(
     """
     if not domains:
         return []
-    query = f"repo:{HA_CORE_REPO} is:issue is:open created:>={since.date().isoformat()}"
+    # Full timestamp, not the date: issues filed earlier on release day
+    # predate the release and are not reports against it.
+    stamp = since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = f"repo:{HA_CORE_REPO} is:issue is:open created:>={stamp}"
     found: dict[int, CommunityIssue] = {}
     for page in range(1, _MAX_ISSUE_PAGES + 1):
         params = {"q": query, "sort": "reactions", "order": "desc", "per_page": "100", "page": str(page)}
@@ -318,7 +328,7 @@ async def async_get_core_issues(
         if not isinstance(items, list):
             break
         for item in items:
-            if isinstance(item, dict) and (issue := _issue_from_item(item, domains)):
+            if isinstance(item, dict) and (issue := _issue_from_item(item, domains, since)):
                 found[issue.number] = issue
         if len(items) < 100:
             break
@@ -328,10 +338,18 @@ async def async_get_core_issues(
 
 def _safe_title(title: str) -> str:
     """Issue titles are user-submitted: flatten markup and escape markdown."""
-    flat = " ".join(strip_markup(title).split())
+    # Remove URLs before escaping: strip_markup defangs bare URLs with
+    # backticks, which the escaping below would undo, re-enabling autolinks.
+    flat = " ".join(_TITLE_URL.sub("", strip_markup(title)).replace("`", "").split())
     if len(flat) > _MAX_TITLE_CHARS:
         flat = flat[: _MAX_TITLE_CHARS - 1].rstrip() + "…"
     return _MARKDOWN_SPECIAL.sub(r"\\\1", flat)
+
+
+def _inert(text: str) -> str:
+    """Render an untrusted version string as a code span (no markup, one line)."""
+    flat = " ".join(text.replace("`", "").split())
+    return f"`{flat}`" if flat else ""
 
 
 def format_issues_for_prompt(signal: CommunitySignal) -> str:
@@ -356,7 +374,9 @@ def deferral_reason(
     Fails open: an unknown release date or missing adoption data never
     blocks. The adoption threshold is waived once the release is
     ADOPTION_GATE_MAX_AGE_DAYS old, so low-install integrations still get
-    analyzed eventually.
+    analyzed eventually — and is skipped when the release age is unknown
+    (e.g. a repo that tags without GitHub Releases), since that waiver
+    could then never apply.
     """
     reasons: list[str] = []
     age = signal.release_age_days(now)
@@ -367,7 +387,8 @@ def deferral_reason(
         min_adoption_pct > 0
         and adoption is not None
         and adoption.pct < min_adoption_pct
-        and (age is None or age < ADOPTION_GATE_MAX_AGE_DAYS)
+        and age is not None
+        and age < ADOPTION_GATE_MAX_AGE_DAYS
     ):
         reasons.append(f"adoption {adoption.pct:g}% below {min_adoption_pct:g}%")
     return "; ".join(reasons) or None
@@ -381,12 +402,12 @@ def format_community_signal(signal: CommunitySignal, target_version: str, now: d
         parts.append("released today" if age == 0 else f"released {age} day{'s' if age != 1 else ''} ago")
     if signal.adoption is not None:
         a = signal.adoption
-        parts.append(f"{a.pct:g}% of {a.total:,} reporting installs on {target_version} or newer")
+        parts.append(f"{a.pct:g}% of {a.total:,} reporting installs on {_inert(target_version)} or newer")
     blocks: list[str] = []
     if parts:
         blocks.append("**Community signal:** " + " · ".join(parts))
     if signal.issues:
-        since = f" since {signal.issues_since}" if signal.issues_since else ""
+        since = f" since {_inert(signal.issues_since)}" if signal.issues_since else ""
         lines = [f"**Open bug reports{since} for your integrations:**"]
         for issue in signal.issues:
             stats = f"{issue.reactions} reaction{'s' if issue.reactions != 1 else ''}"

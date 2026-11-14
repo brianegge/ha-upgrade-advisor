@@ -10,6 +10,7 @@ from typing import Any
 from aiohttp import ClientSession
 from homeassistant.components.persistent_notification import async_create as async_create_notification
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -234,7 +235,7 @@ class UpgradeAdvisorCoordinator:
 
     async def async_analyze_version(self, version: str) -> None:
         """Analyze a specific HA version."""
-        current = self.hass.config.version or "unknown"
+        current = HA_VERSION
         await self._run_analysis(
             upgrade_type="Home Assistant Core",
             component_name="Home Assistant",
@@ -435,10 +436,28 @@ class UpgradeAdvisorCoordinator:
                 component_name, current_version, target_version, repo, entity_id
             ):
                 return
-            self.deferred.pop(entity_id or component_name, None)
+            self._clear_deferral(component_name, target_version, entity_id, automatic)
             await self._run_analysis_pipeline(
                 upgrade_type, component_name, current_version, target_version, repo, entity_id
             )
+
+    def _clear_deferral(self, component_name: str, target_version: str, entity_id: str | None, automatic: bool) -> None:
+        """Drop the deferral this analysis satisfies.
+
+        An automatic run that passed the gate replaces its update's deferral.
+        A manual run clears one only for the same release: analyze_version of
+        some other version must not drop a held-back update from the retry
+        queue, since its update entity stays "on" and nothing would requeue it.
+        """
+        if automatic and entity_id is not None:
+            self.deferred.pop(entity_id, None)
+        for key, info in list(self.deferred.items()):
+            if entity_id:
+                same_update = info.get("entity_id") == entity_id
+            else:
+                same_update = info.get("component_name") == component_name
+            if same_update and info.get("target_version") == target_version:
+                del self.deferred[key]
 
     async def _run_analysis_pipeline(
         self,
@@ -549,6 +568,12 @@ class UpgradeAdvisorCoordinator:
             return False
 
         _LOGGER.info("Deferring analysis of %s %s: %s", component_name, target_version, reason)
+        # A report for an older target of this update is stale now; keep it
+        # only if it is for the release being held back.
+        previous = self.reports.get(component_name)
+        if previous is not None and previous.target_version != target_version:
+            del self.reports[component_name]
+            self._rebuild_summary()
         self.deferred[entity_id or component_name] = {
             "component_name": component_name,
             "entity_id": entity_id,
