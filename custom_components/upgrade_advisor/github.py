@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from html.parser import HTMLParser
+from typing import Any
 
 from aiohttp import ClientSession, ClientTimeout
 
@@ -14,6 +16,80 @@ _LOGGER = logging.getLogger(__name__)
 
 _TIMEOUT = ClientTimeout(total=30)
 _BLOG_TIMEOUT = ClientTimeout(total=60)
+
+# Release metadata is read several times per analysis (release notes, release
+# date, the deferral gate). A short cache keeps that to one request each, which
+# matters under GitHub's 60 requests/hour unauthenticated limit.
+_RELEASE_CACHE_TTL_SECONDS = 15 * 60
+_MISSING = object()
+_release_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _clear_release_cache() -> None:
+    """Drop cached GitHub release metadata (tests)."""
+    _release_cache.clear()
+
+
+def _cache_get(url: str) -> Any:
+    now = time.monotonic()
+    for key in [k for k, (stamp, _) in _release_cache.items() if now - stamp >= _RELEASE_CACHE_TTL_SECONDS]:
+        del _release_cache[key]
+    cached = _release_cache.get(url)
+    return _MISSING if cached is None else cached[1]
+
+
+async def async_get_release(session: ClientSession, repo: str, tag: str) -> dict | None:
+    """Release payload for one tag (None if missing or on error). Cached briefly."""
+    url = f"{GITHUB_API_BASE}/repos/{repo}/releases/tags/{tag}"
+    cached = _cache_get(url)
+    if cached is not _MISSING:
+        return cached
+    try:
+        async with session.get(url, timeout=_TIMEOUT) as resp:
+            if resp.status == 404:
+                _LOGGER.debug("No release found for %s tag %s", repo, tag)
+                _release_cache[url] = (time.monotonic(), None)
+                return None
+            resp.raise_for_status()
+            data = await resp.json()
+    except Exception:
+        _LOGGER.exception("Failed to fetch release %s tag %s", repo, tag)
+        return None
+    release = data if isinstance(data, dict) else None
+    _release_cache[url] = (time.monotonic(), release)
+    return release
+
+
+async def async_get_release_with_v_fallback(session: ClientSession, repo: str, tag: str) -> dict | None:
+    """Release payload for a tag, retrying with a 'v' prefix (common for HACS repos)."""
+    release = await async_get_release(session, repo, tag)
+    if release is None and not tag.startswith("v"):
+        release = await async_get_release(session, repo, f"v{tag}")
+    return release
+
+
+def is_stable_core_tag(release: dict) -> bool:
+    """True for a stable (non-beta, non-dev) Home Assistant Core release."""
+    tag = release.get("tag_name", "") or ""
+    return bool(tag) and not release.get("prerelease") and "b" not in tag and "dev" not in tag
+
+
+async def async_list_core_releases(session: ClientSession) -> list[dict] | None:
+    """The last 100 Home Assistant Core releases (None on error). Cached briefly."""
+    url = f"{GITHUB_API_BASE}/repos/{HA_CORE_REPO}/releases?per_page=100"
+    cached = _cache_get(url)
+    if cached is not _MISSING:
+        return cached
+    try:
+        async with session.get(url, timeout=_TIMEOUT) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+    except Exception:
+        _LOGGER.exception("Failed to list HA releases")
+        return None
+    releases = [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
+    _release_cache[url] = (time.monotonic(), releases)
+    return releases
 
 
 def _version_tuple(tag: str) -> tuple[int, ...]:
@@ -106,30 +182,22 @@ async def async_get_release_notes(session: ClientSession, repo: str, tag: str) -
 
     For HA core .0 releases, the GitHub body is just a blog URL — fetch the blog post instead.
     """
-    url = f"{GITHUB_API_BASE}/repos/{repo}/releases/tags/{tag}"
-    try:
-        async with session.get(url, timeout=_TIMEOUT) as resp:
-            if resp.status == 404:
-                _LOGGER.debug("No release found for %s tag %s", repo, tag)
-                return None
-            resp.raise_for_status()
-            data = await resp.json()
-            body = data.get("body", "") or ""
-
-            # If body is just a URL (HA .0 releases), fetch the blog post
-            stripped = body.strip()
-            if stripped.startswith("https://www.home-assistant.io/blog/") and len(stripped) < 200:
-                _LOGGER.info("Fetching HA blog post for %s: %s", tag, stripped)
-                blog_text = await _async_fetch_blog_post(session, stripped)
-                if blog_text:
-                    return blog_text
-                # Fall back to the URL itself if blog fetch fails
-                return f"Release notes at: {stripped}"
-
-            return body
-    except Exception:
-        _LOGGER.exception("Failed to fetch release notes for %s tag %s", repo, tag)
+    data = await async_get_release(session, repo, tag)
+    if data is None:
         return None
+    body = data.get("body", "") or ""
+
+    # If body is just a URL (HA .0 releases), fetch the blog post
+    stripped = body.strip()
+    if stripped.startswith("https://www.home-assistant.io/blog/") and len(stripped) < 200:
+        _LOGGER.info("Fetching HA blog post for %s: %s", tag, stripped)
+        blog_text = await _async_fetch_blog_post(session, stripped)
+        if blog_text:
+            return blog_text
+        # Fall back to the URL itself if blog fetch fails
+        return f"Release notes at: {stripped}"
+
+    return body
 
 
 async def async_get_ha_release_notes_range(
@@ -140,24 +208,17 @@ async def async_get_ha_release_notes_range(
     Fetches every release in the range (current_version, target_version] and
     concatenates them in version order.
     """
-    # List releases from GitHub (paginated, up to 100)
-    releases_url = f"{GITHUB_API_BASE}/repos/{HA_CORE_REPO}/releases?per_page=100"
-    try:
-        async with session.get(releases_url, timeout=_TIMEOUT) as resp:
-            resp.raise_for_status()
-            all_releases = await resp.json()
-    except Exception:
-        _LOGGER.exception("Failed to list HA releases")
+    # List releases from GitHub (up to 100, shared with the community signal)
+    all_releases = await async_list_core_releases(session)
+    if all_releases is None:
         return None
 
     # Filter to stable releases in the version range
-    relevant: list[dict] = []
-    for release in all_releases:
-        tag = release.get("tag_name", "")
-        if release.get("prerelease") or "b" in tag or "dev" in tag:
-            continue
-        if _is_version_between(tag, current_version, target_version):
-            relevant.append(release)
+    relevant = [
+        release
+        for release in all_releases
+        if is_stable_core_tag(release) and _is_version_between(release["tag_name"], current_version, target_version)
+    ]
 
     if not relevant:
         _LOGGER.warning(

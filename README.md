@@ -16,6 +16,7 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 - Uses any HA conversation agent (OpenAI, Google, Anthropic, Ollama, etc. via OpenRouter)
 - Creates repair issues for verified breaking changes
 - Risk assessment (Low/Medium/High) based on evidence, not speculation
+- Community signal: release age, how many Home Assistant installs already run the new version, and open bug reports for the integrations you use
 
 ## Requirements
 
@@ -82,9 +83,12 @@ Go to **Settings > Integrations > Upgrade Advisor > Configure**:
 | Conversation agent | (from setup) | The AI agent used for analysis — change it here any time |
 | Analyze on update available | On | Auto-analyze when updates appear |
 | Analyze HACS updates | On | Include HACS component updates |
+| Wait days after release | 0 | Hold automatic analysis until the release is this many days old |
+| Wait for adoption % | 0 | Hold automatic analysis until this share of installs runs the new version |
 | Create repair issues | On | Create repairs for breaking changes |
 | Include automations | On | Send automation list to AI for context |
 | Include add-ons | On | Send add-on list to AI for context |
+| Include open GitHub bug reports | On | For Core updates, list open issues filed since the release for integrations you use |
 | Dashboard URL path | `upgrade-advisor` | Path to the report dashboard |
 
 ## How It Works
@@ -119,6 +123,39 @@ The check results (with evidence) are sent back to the AI to produce a concise, 
 No action required — safe to upgrade.
 ```
 
+## Community Signal
+
+Each report ends with a one-line community signal, the same kind of adoption badge Renovate shows:
+
+> **Community signal:** released 6 days ago · 24.5% of 728,158 reporting installs on 2026.11.1 or newer
+
+- **Release age** comes from the GitHub release's publish date.
+- **Adoption** comes from Home Assistant's public, opt-in [analytics](https://analytics.home-assistant.io): Core versions from `current_data.json`, HACS integrations from `custom_integrations.json` (matched to the integration whose manifest points at the update's GitHub repo). Betas and local builds are excluded.
+
+The analytics are a daily snapshot of installs that opted in, so a release only a few hours old shows little or no adoption yet.
+
+### Open bug reports (Home Assistant Core)
+
+Release notes cover planned changes; regressions show up in the issue tracker once people start upgrading. For Core updates, the integration searches `home-assistant/core` for open issues filed since the first release after your installed version, keeps only those labelled `integration: <domain>` for a domain loaded in your installation, and lists the five most-reacted under the community signal:
+
+> **Open bug reports since 2026.11.0 for your integrations:**
+> - #190913 Zigbee(Hue) light groups failing to respond to commands after 2026.11 — `zha` · 4 reactions, 2 comments
+
+Your AI agent sees the same list. An issue that describes a regression in something you demonstrably use can raise the risk to Medium (never High) and add a "consider waiting for a patch release" note to the verdict, but issues never count as breaking changes.
+
+This uses GitHub's unauthenticated search API (about five requests per Core analysis). HACS repositories are not searched yet, because their unauthenticated limits are much tighter. Turn it off with **Include open GitHub bug reports**.
+
+### Waiting for the community to go first
+
+Like Renovate's `minimumReleaseAge`, you can hold automatic analysis back until a release has had time to collect bug reports:
+
+- **Wait days after release** — e.g. `3` analyzes a release three days after it was published.
+- **Wait for adoption %** — e.g. `10` waits until 10% of reporting installs run the new version or newer. It is waived once a release is 30 days old, so integrations with few reporting installs are not held back forever, and skipped when the release date is unknown (e.g. a repo that tags without GitHub Releases).
+
+Held-back updates are listed in the status sensor's `deferred_updates` attribute and re-checked every 3 hours. The gate fails open: if the release date or adoption data can't be fetched, the analysis runs. Calling `upgrade_advisor.analyze` or `analyze_version` always runs immediately.
+
+Nothing about your installation is sent to fetch any of this: the analytics files are downloaded whole, and the issue search only names the date. Matching against your integrations happens locally.
+
 ## What Is Sent to Your AI Agent
 
 Your configuration is read locally by Home Assistant; nothing needs to be on GitHub, and your YAML files are never sent wholesale. For each update, your AI agent receives:
@@ -127,6 +164,7 @@ Your configuration is read locally by Home Assistant; nothing needs to be on Git
 - Your integrations: each integration's domain and the title of each configured entry
 - A device summary grouped by integration: how many devices of each manufacturer and model (or the device's name, when it has no manufacturer or model) and how many entities of each type (`light`, `sensor`, ...)
 - Your HACS components and their installed versions
+- For Core updates, the titles of open GitHub issues that match your integrations (see [Community Signal](#community-signal))
 - Your automations' names and on/off state — unless **Include automations** is turned off
 - In the summary step, the results of the checks it planned, including any matching config lines, with values redacted as described below
 
@@ -159,6 +197,9 @@ Release notes are third-party text and are treated as untrusted input end to end
 - `available_version` — target version
 - `last_analysis` — timestamp of last report
 - `breaking_change_count` — number of verified breaking changes
+- `release_age_days` — days since the most recently analyzed component's target version was released, as of that analysis (when known)
+- `adoption_pct` — percent of reporting installs on that version or newer, as of that analysis (when known)
+- `deferred_updates` — updates held back by the release-age / adoption options, keyed by update entity ID, each with `name`, `target_version` and `reason`
 - `report` — full report (markdown), including all analyzed components
 
 ## Services

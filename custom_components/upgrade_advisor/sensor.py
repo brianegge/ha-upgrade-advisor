@@ -80,6 +80,21 @@ class UpgradeAdvisorStatusSensor(UpgradeAdvisorSensorBase):
             "last_analysis": self.coordinator.last_analysis,
             "breaking_change_count": self.coordinator.breaking_change_count,
         }
+        if getattr(self.coordinator, "release_age_days", None) is not None:
+            attrs["release_age_days"] = self.coordinator.release_age_days
+        if getattr(self.coordinator, "adoption_pct", None) is not None:
+            attrs["adoption_pct"] = self.coordinator.adoption_pct
+        deferred = getattr(self.coordinator, "deferred", None)
+        if deferred:
+            # Keyed by entity_id: friendly names are not unique.
+            attrs["deferred_updates"] = {
+                key: {
+                    "name": info.get("component_name", key),
+                    "target_version": info["target_version"],
+                    "reason": info["reason"],
+                }
+                for key, info in deferred.items()
+            }
         if self.coordinator.report:
             attrs["report"] = self.coordinator.report
         if getattr(self.coordinator, "post_upgrade_report", None):
