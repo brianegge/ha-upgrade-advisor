@@ -1,6 +1,9 @@
 {
   "domain": "upgrade_advisor",
   "name": "Upgrade Advisor",
+  "categories": [
+    "computers_network.cloud_developer_tools"
+  ],
   "codeowners": [
     "@brianegge"
   ],

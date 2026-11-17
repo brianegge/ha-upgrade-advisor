@@ -44,7 +44,7 @@ Each integration section shows "entities by domain" — use this to verify a \
 domain-specific feature applies. If the release note talks about covers but \
 the integration has no `cover` entities, skip it.
 
-## HACS Components
+## Marketplace (HACS) Components
 {hacs_components}
 
 ## CRITICAL RULE
@@ -334,7 +334,7 @@ them.
 ## Add-ons
 {addons}
 
-## HACS Components
+## Marketplace (HACS) Components
 {hacs_components}
 {community_section}
 ## Instructions
@@ -486,7 +486,7 @@ def build_single_pass_prompt(
     hacs_components: str = "N/A",
     community_issues: str = "",
 ) -> str:
-    """Build the legacy single-pass prompt (fallback for HACS components)."""
+    """Build the legacy single-pass prompt (fallback when the two-phase analysis fails)."""
     return SINGLE_PASS_PROMPT.format(
         upgrade_type=upgrade_type,
         component_name=component_name,

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Custom Home Assistant HACS integration (`upgrade_advisor`) that uses AI conversation agents to analyze HA and HACS component release notes against the user's configuration, producing upgrade impact reports with risk assessments and breaking change identification.
+Custom Home Assistant integration (`upgrade_advisor`, distributed through the Marketplace, formerly HACS) that uses AI conversation agents to analyze HA and Marketplace (HACS) component release notes against the user's configuration, producing upgrade impact reports with risk assessments and breaking change identification.
 
 ## Directory Structure
 
@@ -62,7 +62,7 @@ ha-upgrade-advisor/
 
 ### Analysis Pipeline
 
-1. **Trigger** — update entity state change (HA core or HACS) or manual service call
+1. **Trigger** — update entity state change (HA core or Marketplace/HACS) or manual service call
 2. **Fetch** — release notes from GitHub API (`github.py`)
 3. **Gather** — installation context: integrations, devices (summarized), automations, add-ons (`summarize.py`)
 4. **Prompt** — build structured prompt with release notes + context (`analyzer.py`)
@@ -83,6 +83,8 @@ The `conversation` component is loaded lazily (import inside functions) to avoid
 
 ## Conventions
 
+- Say "Marketplace (HACS)" in user-facing text: HA 2026.11 replaced HACS with the built-in Marketplace, but older installs still run HACS. The stored option key `scan_hacs_updates` (`CONF_SCAN_HACS`) keeps its name so existing config entries keep working.
+- Read entity display names with `State.name`, not the `friendly_name` attribute (Home Assistant plans to deprecate it, announced with 2026.11).
 - Follow Home Assistant custom component conventions.
 - Use `hass.data[DOMAIN][entry_id]` for runtime data (coordinator, event entity).
 - Use `has_entity_name = True` with `translation_key` for entity names.

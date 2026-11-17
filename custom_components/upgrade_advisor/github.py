@@ -61,7 +61,7 @@ async def async_get_release(session: ClientSession, repo: str, tag: str) -> dict
 
 
 async def async_get_release_with_v_fallback(session: ClientSession, repo: str, tag: str) -> dict | None:
-    """Release payload for a tag, retrying with a 'v' prefix (common for HACS repos)."""
+    """Release payload for a tag, retrying with a 'v' prefix (common for Marketplace/HACS repos)."""
     release = await async_get_release(session, repo, tag)
     if release is None and not tag.startswith("v"):
         release = await async_get_release(session, repo, f"v{tag}")
@@ -281,7 +281,7 @@ async def async_get_latest_ha_release(session: ClientSession) -> dict | None:
 
 
 async def async_get_hacs_release_notes(session: ClientSession, repo: str, version: str) -> str | None:
-    """Fetch release notes for a HACS component.
+    """Fetch release notes for a Marketplace (HACS) component.
 
     Tries the version as-is first, then with 'v' prefix.
     """

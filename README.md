@@ -12,7 +12,7 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 - **Two-phase analysis** — AI identifies potential issues, then the integration verifies them automatically
 - Searches your YAML config for deprecated options (secrets files and `.storage` are never read)
 - Checks entity availability and automation references
-- Analyzes HA core and HACS component updates
+- Analyzes HA core and Marketplace (HACS) component updates
 - Uses any HA conversation agent (OpenAI, Google, Anthropic, Ollama, etc. via OpenRouter)
 - Creates repair issues for verified breaking changes
 - Risk assessment (Low/Medium/High) based on evidence, not speculation
@@ -27,15 +27,25 @@ AI-powered upgrade analysis for Home Assistant. When an update is available, the
 
 You need a conversation agent backed by a large language model: OpenAI, Google Generative AI, Anthropic, OpenRouter, Ollama, or similar. This integration doesn't call an AI service itself; set one up under **Settings > Devices & services** first, then pick it during setup. The built-in **Home Assistant** agent won't work: it only understands fixed voice commands, not free-form prompts.
 
-Each update costs **two AI requests**: one to plan the checks and one to summarize the results (plus one more if the planning step fails). Updates are analyzed one at a time, but when HACS surfaces several updates at once, that is still several requests within a minute or two.
+Each update costs **two AI requests**: one to plan the checks and one to summarize the results (plus one more if the planning step fails). Updates are analyzed one at a time, but when the Marketplace (HACS) surfaces several updates at once, that is still several requests within a minute or two.
 
-- **Paid APIs** (OpenAI, Anthropic, Google, OpenRouter credits) — the most reliable choice. Cost depends on the model: HACS updates are small, while a Home Assistant core release sends the full release notes and blog post.
+- **Paid APIs** (OpenAI, Anthropic, Google, OpenRouter credits) — the most reliable choice. Cost depends on the model: Marketplace (HACS) component updates are small, while a Home Assistant core release sends the full release notes and blog post.
 - **Free tiers** — work, within their limits. Google Gemini's free tier allows only a few requests per minute and per day, so a batch of updates can hit HTTP 429 (rate limit) errors; the report then says so for each affected update, and you can re-run the analysis later. [OpenRouter's free models](https://openrouter.ai/collections/free-models) are another free option; which models are free changes over time.
 - **Local models** (Ollama) — free and private, with no rate limits. Report quality depends on the model; small models may not follow the structured output the integration needs.
 
 ## Installation
 
-### HACS
+### Marketplace (Home Assistant 2026.11 and newer)
+
+1. Go to **Settings > Marketplace**
+2. Select **Add from link** in the upper-right corner
+3. Enter `https://github.com/brianegge/ha-upgrade-advisor` and select **Add** (the Marketplace asks you to connect GitHub first if you haven't)
+4. Open Upgrade Advisor in the list and select **Install**
+5. Restart Home Assistant when the repair asks you to
+
+If you installed Upgrade Advisor through HACS, the Marketplace migrates it automatically when you upgrade to 2026.11; your settings are kept.
+
+### HACS (before Home Assistant 2026.11)
 
 1. Open HACS in your Home Assistant instance
 2. Click the three dots menu and select "Custom repositories"
@@ -82,7 +92,7 @@ Go to **Settings > Integrations > Upgrade Advisor > Configure**:
 |--------|---------|-------------|
 | Conversation agent | (from setup) | The AI agent used for analysis — change it here any time |
 | Analyze on update available | On | Auto-analyze when updates appear |
-| Analyze HACS updates | On | Include HACS component updates |
+| Analyze Marketplace (HACS) component updates | On | Include updates of custom integrations, dashboards and themes installed from the Marketplace (or HACS before 2026.11) |
 | Wait days after release | 0 | Hold automatic analysis until the release is this many days old |
 | Wait for adoption % | 0 | Hold automatic analysis until this share of installs runs the new version |
 | Create repair issues | On | Create repairs for breaking changes |
@@ -130,7 +140,7 @@ Each report ends with a one-line community signal, the same kind of adoption bad
 > **Community signal:** released 6 days ago · 24.5% of 728,158 reporting installs on 2026.11.1 or newer
 
 - **Release age** comes from the GitHub release's publish date.
-- **Adoption** comes from Home Assistant's public, opt-in [analytics](https://analytics.home-assistant.io): Core versions from `current_data.json`, HACS integrations from `custom_integrations.json` (matched to the integration whose manifest points at the update's GitHub repo). Betas and local builds are excluded.
+- **Adoption** comes from Home Assistant's public, opt-in [analytics](https://analytics.home-assistant.io): Core versions from `current_data.json`, Marketplace (HACS) integrations from `custom_integrations.json` (matched to the integration whose manifest points at the update's GitHub repo). Betas and local builds are excluded.
 
 The analytics are a daily snapshot of installs that opted in, so a release only a few hours old shows little or no adoption yet.
 
@@ -143,7 +153,7 @@ Release notes cover planned changes; regressions show up in the issue tracker on
 
 Your AI agent sees the same list. An issue that describes a regression in something you demonstrably use can raise the risk to Medium (never High) and add a "consider waiting for a patch release" note to the verdict, but issues never count as breaking changes.
 
-This uses GitHub's unauthenticated search API (about five requests per Core analysis). HACS repositories are not searched yet, because their unauthenticated limits are much tighter. Turn it off with **Include open GitHub bug reports**.
+This uses GitHub's unauthenticated search API (about five requests per Core analysis). Marketplace (HACS) repositories are not searched yet, because their unauthenticated limits are much tighter. Turn it off with **Include open GitHub bug reports**.
 
 ### Waiting for the community to go first
 
@@ -163,7 +173,7 @@ Your configuration is read locally by Home Assistant; nothing needs to be on Git
 - The release notes (fetched from GitHub's public API)
 - Your integrations: each integration's domain and the title of each configured entry
 - A device summary grouped by integration: how many devices of each manufacturer and model (or the device's name, when it has no manufacturer or model) and how many entities of each type (`light`, `sensor`, ...)
-- Your HACS components and their installed versions
+- Your Marketplace (HACS) components and their installed versions
 - For Core updates, the titles of open GitHub issues that match your integrations (see [Community Signal](#community-signal))
 - Your automations' names and on/off state — unless **Include automations** is turned off
 - In the summary step, the results of the checks it planned, including any matching config lines, with values redacted as described below
@@ -206,7 +216,7 @@ Release notes are third-party text and are treated as untrusted input end to end
 
 | Service | Description |
 |---------|-------------|
-| `upgrade_advisor.analyze` | Analyze all pending updates (HA core + HACS) |
+| `upgrade_advisor.analyze` | Analyze all pending updates (HA core + Marketplace/HACS components) |
 | `upgrade_advisor.analyze_version` | Analyze a specific HA version |
 
 ## Automation Example
@@ -234,4 +244,4 @@ automation:
 - Analysis quality depends on the AI conversation agent used
 - Release notes come from GitHub's public API, which allows 60 unauthenticated requests per hour. Each update needs one or two requests, so this only matters if you analyze dozens of updates within an hour. It does not limit your AI agent.
 - Two LLM calls per HA core analysis (plan + summarize) — may take 1-2 minutes
-- HACS component detection relies on `release_url` attribute containing a GitHub URL
+- Marketplace (HACS) component updates are analyzed only when the update entity's `release_url` points at GitHub, since that is where release notes are read. Entities without one are listed as installed components but skipped (logged at info level)

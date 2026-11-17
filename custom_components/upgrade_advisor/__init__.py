@@ -6,12 +6,14 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from aiohttp import ClientSession
 from homeassistant.components.persistent_notification import async_create as async_create_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import Event, HomeAssistant, State, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import (
@@ -82,6 +84,8 @@ from .const import (
     DEFERRED_RECHECK_INTERVAL,
     DOMAIN,
     HA_CORE_UPDATE_ENTITY,
+    MARKETPLACE_DOMAINS,
+    MARKETPLACE_UPGRADE_TYPE,
     PLATFORMS,
     STARTUP_DELAY_SECONDS,
 )
@@ -92,6 +96,8 @@ from .services import async_register_services, async_unregister_services
 from .summarize import build_installation_context
 
 _LOGGER = logging.getLogger(__name__)
+
+GITHUB_HOSTS = frozenset({"github.com", "www.github.com"})
 
 
 class UpgradeAdvisorCoordinator:
@@ -127,7 +133,7 @@ class UpgradeAdvisorCoordinator:
         self.last_post_upgrade_check: str | None = None
         self.pending_store: PendingStore = PendingStore(hass)
 
-        # One analysis at a time: HACS often surfaces several updates at once,
+        # One analysis at a time: the Marketplace often surfaces several updates at once,
         # and parallel runs burst the agent past free-tier rate limits.
         self._analysis_lock = asyncio.Lock()
 
@@ -180,7 +186,7 @@ class UpgradeAdvisorCoordinator:
         )
 
     async def async_analyze_available_update(self, automatic: bool = False) -> None:
-        """Analyze all pending updates — HA core and HACS components."""
+        """Analyze all pending updates — HA core and Marketplace (HACS) components."""
         # Pending component -> target version. Reports for anything else are
         # pruned after the scan (not before it, so an update the gate holds
         # back doesn't leave the combined report half-rebuilt).
@@ -205,7 +211,7 @@ class UpgradeAdvisorCoordinator:
                 )
                 analyzed = True
 
-        # HACS / other component updates
+        # Marketplace (HACS) / other GitHub-released component updates
         scan_hacs = self._get_option(CONF_SCAN_HACS, DEFAULT_SCAN_HACS)
         if scan_hacs:
             for update_state in self.hass.states.async_all("update"):
@@ -213,11 +219,9 @@ class UpgradeAdvisorCoordinator:
                     continue
                 if update_state.state != "on":
                     continue
-                release_url = update_state.attributes.get("release_url") or ""
-                if "github.com" not in release_url:
+                if not _is_component_update(self.hass, update_state):
                     continue
-                name = update_state.attributes.get("friendly_name", update_state.entity_id)
-                pending[name] = update_state.attributes.get("latest_version", "")
+                pending[update_state.name] = update_state.attributes.get("latest_version", "")
                 await self.async_analyze_hacs_update(update_state.entity_id, automatic=automatic)
                 analyzed = True
 
@@ -246,24 +250,33 @@ class UpgradeAdvisorCoordinator:
         )
 
     async def async_analyze_hacs_update(self, entity_id: str, automatic: bool = False) -> None:
-        """Analyze a HACS component update."""
+        """Analyze a Marketplace (HACS) component update."""
         state = self.hass.states.get(entity_id)
         if state is None or state.state != "on":
             return
 
         current = state.attributes.get("installed_version", "")
         target = state.attributes.get("latest_version", "")
-        title = state.attributes.get("friendly_name", entity_id)
-        # HACS update entities store the release URL which contains the repo path
-        release_url = state.attributes.get("release_url", "")
+        # State.name, not the friendly_name attribute Home Assistant is
+        # deprecating; it returns the same display name.
+        title = state.name
+        # Marketplace (HACS) update entities store the release URL, which contains the repo path
+        release_url = state.attributes.get("release_url") or ""
         repo = _extract_repo_from_url(release_url)
 
         if not target or not repo:
-            _LOGGER.debug("Cannot analyze HACS update for %s: missing version or repo", entity_id)
+            # A Marketplace entity without a GitHub release link would
+            # otherwise be skipped silently.
+            _LOGGER.info(
+                "Cannot analyze update %s (%s): no latest version or GitHub release link (release_url=%r)",
+                entity_id,
+                title,
+                release_url,
+            )
             return
 
         await self._run_analysis(
-            upgrade_type="HACS Component",
+            upgrade_type=MARKETPLACE_UPGRADE_TYPE,
             component_name=title,
             current_version=current,
             target_version=target,
@@ -491,7 +504,7 @@ class UpgradeAdvisorCoordinator:
         include_addons = self._get_option(CONF_INCLUDE_ADDONS, DEFAULT_INCLUDE_ADDONS)
         context = build_installation_context(self.hass, include_automations, include_addons)
 
-        # Build HACS component list
+        # Build the Marketplace (HACS) component list
         hacs_components = self._get_hacs_component_list()
 
         agent_id = self.agent_id
@@ -901,20 +914,30 @@ class UpgradeAdvisorCoordinator:
         self._async_notify_listeners()
 
     def _get_hacs_component_list(self) -> str:
-        """Get a list of installed HACS components from update entities."""
+        """List installed Marketplace (HACS) components from their update entities."""
         lines: list[str] = []
         for state in self.hass.states.async_all("update"):
-            entity_id = state.entity_id
-            # HACS update entities follow a naming pattern
-            release_url = state.attributes.get("release_url") or ""
-            if "hacs" not in entity_id and not release_url.startswith("https://github.com"):
+            if state.entity_id == HA_CORE_UPDATE_ENTITY or not _is_component_update(self.hass, state):
                 continue
-            name = state.attributes.get("friendly_name", entity_id)
             installed = state.attributes.get("installed_version", "?")
             update_available = " (update available)" if state.state == "on" else ""
-            lines.append(f"- {name}: {installed}{update_available}")
+            lines.append(f"- {state.name}: {installed}{update_available}")
 
-        return "\n".join(lines) if lines else "No HACS components detected."
+        return "\n".join(lines) if lines else "No Marketplace (HACS) components detected."
+
+
+def _is_component_update(hass: HomeAssistant, state: State) -> bool:
+    """Whether an update entity tracks a Marketplace (HACS) or other GitHub-released component.
+
+    Marketplace (2026.11+) and HACS update entities are recognized by the
+    integration that owns them, so they are listed even when their release
+    link is not a GitHub URL. Any other update entity counts when its
+    release_url is a GitHub repository URL, since that is where release notes are read.
+    """
+    entry = er.async_get(hass).async_get(state.entity_id)
+    if entry is not None and entry.platform in MARKETPLACE_DOMAINS:
+        return True
+    return _extract_repo_from_url(state.attributes.get("release_url")) is not None
 
 
 def _resolve_release_url(update_state: State | None, repo: str | None, target_version: str) -> str:
@@ -938,15 +961,20 @@ def _component_anchor(name: str) -> str:
     return name.lower().replace(" ", "-")
 
 
-def _extract_repo_from_url(url: str) -> str | None:
-    """Extract owner/repo from a GitHub URL."""
+def _extract_repo_from_url(url: str | None) -> str | None:
+    """Extract owner/repo from a GitHub URL, or None if it is not one."""
     # e.g., https://github.com/owner/repo/releases/tag/v1.0.0
-    if not url or "github.com" not in url:
+    if not url:
         return None
-    parts = url.split("github.com/")
-    if len(parts) < 2:
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
         return None
-    path_parts = parts[1].split("/")
+    # Match the host exactly: a "github.com" substring would also accept
+    # e.g. https://github.com.example/ or https://example.com/?github.com/a/b
+    if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() not in GITHUB_HOSTS:
+        return None
+    path_parts = [part for part in parsed.path.split("/") if part]
     if len(path_parts) >= 2:
         return f"{path_parts[0]}/{path_parts[1]}"
     return None
@@ -1025,7 +1053,7 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
 
     @callback
     def _on_any_state_change(event: Event) -> None:
-        """Watch for HACS update entities becoming available at runtime."""
+        """Watch for Marketplace (HACS) update entities becoming available at runtime."""
         if not startup_complete:
             return
         entity_id = event.data.get("entity_id", "")
@@ -1037,8 +1065,7 @@ def _setup_update_listeners(hass: HomeAssistant, entry: ConfigEntry, coordinator
             return
         if old_state is not None and old_state.state == "on":
             return
-        release_url = new_state.attributes.get("release_url") or ""
-        if "github.com" not in release_url:
+        if not _is_component_update(hass, new_state):
             return
         if entry.options.get(CONF_SCAN_HACS, DEFAULT_SCAN_HACS):
             hass.async_create_task(coordinator.async_analyze_hacs_update(entity_id, automatic=True))
