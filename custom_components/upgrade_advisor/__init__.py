@@ -6,6 +6,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from aiohttp import ClientSession
 from homeassistant.components.persistent_notification import async_create as async_create_notification
@@ -95,6 +96,8 @@ from .services import async_register_services, async_unregister_services
 from .summarize import build_installation_context
 
 _LOGGER = logging.getLogger(__name__)
+
+GITHUB_HOSTS = frozenset({"github.com", "www.github.com"})
 
 
 class UpgradeAdvisorCoordinator:
@@ -929,12 +932,12 @@ def _is_component_update(hass: HomeAssistant, state: State) -> bool:
     Marketplace (2026.11+) and HACS update entities are recognized by the
     integration that owns them, so they are listed even when their release
     link is not a GitHub URL. Any other update entity counts when its
-    release_url points at GitHub, since that is where release notes are read.
+    release_url is a GitHub repository URL, since that is where release notes are read.
     """
     entry = er.async_get(hass).async_get(state.entity_id)
     if entry is not None and entry.platform in MARKETPLACE_DOMAINS:
         return True
-    return "github.com" in (state.attributes.get("release_url") or "")
+    return _extract_repo_from_url(state.attributes.get("release_url")) is not None
 
 
 def _resolve_release_url(update_state: State | None, repo: str | None, target_version: str) -> str:
@@ -958,15 +961,20 @@ def _component_anchor(name: str) -> str:
     return name.lower().replace(" ", "-")
 
 
-def _extract_repo_from_url(url: str) -> str | None:
-    """Extract owner/repo from a GitHub URL."""
+def _extract_repo_from_url(url: str | None) -> str | None:
+    """Extract owner/repo from a GitHub URL, or None if it is not one."""
     # e.g., https://github.com/owner/repo/releases/tag/v1.0.0
-    if not url or "github.com" not in url:
+    if not url:
         return None
-    parts = url.split("github.com/")
-    if len(parts) < 2:
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
         return None
-    path_parts = parts[1].split("/")
+    # Match the host exactly: a "github.com" substring would also accept
+    # e.g. https://github.com.example/ or https://example.com/?github.com/a/b
+    if parsed.scheme not in ("http", "https") or (parsed.hostname or "").lower() not in GITHUB_HOSTS:
+        return None
+    path_parts = [part for part in parsed.path.split("/") if part]
     if len(path_parts) >= 2:
         return f"{path_parts[0]}/{path_parts[1]}"
     return None

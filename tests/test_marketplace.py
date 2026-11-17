@@ -12,7 +12,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.upgrade_advisor import UpgradeAdvisorCoordinator, _is_component_update
+from custom_components.upgrade_advisor import UpgradeAdvisorCoordinator, _extract_repo_from_url, _is_component_update
 from custom_components.upgrade_advisor.const import (
     CONF_SCAN_HACS,
     DOMAIN,
@@ -95,6 +95,26 @@ async def test_stored_key_false_skips_marketplace_updates(hass: HomeAssistant) -
 
 
 # --- Recognizing Marketplace update entities ---
+
+
+@pytest.mark.parametrize(
+    ("url", "repo"),
+    [
+        (GITHUB_RELEASE, "thomasloven/lovelace-card-mod"),
+        ("https://www.github.com/o/r/releases/v1", "o/r"),
+        ("http://github.com/o/r", "o/r"),
+        ("https://github.com/o", None),
+        ("https://github.com.attacker.example/o/r", None),
+        ("https://attacker.example/?u=github.com/o/r", None),
+        ("https://gist.github.com/o/r", None),
+        ("ftp://github.com/o/r", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_extract_repo_from_url(url: str | None, repo: str | None) -> None:
+    """Only real github.com URLs yield a repo; a 'github.com' substring is not enough."""
+    assert _extract_repo_from_url(url) == repo
 
 
 async def test_is_component_update(hass: HomeAssistant) -> None:
