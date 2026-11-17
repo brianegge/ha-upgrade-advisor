@@ -160,7 +160,7 @@ def compute_adoption(version_counts: dict[str, int], target_version: str) -> Ado
     for version, count in version_counts.items():
         if not isinstance(count, int):
             continue
-        # Skip pre-releases, except the target itself (a HACS beta channel).
+        # Skip pre-releases, except the target itself (a Marketplace/HACS pre-release).
         if version.lstrip("v") != target_version.lstrip("v") and _PRERELEASE_RE.search(version.lstrip("v")):
             continue
         parsed_raw = _version_tuple(version)
@@ -187,7 +187,7 @@ async def async_get_core_adoption(session: ClientSession, target_version: str) -
 
 
 async def async_get_custom_adoption(session: ClientSession, domain: str, target_version: str) -> Adoption | None:
-    """Adoption of a custom (HACS) integration version, by integration domain."""
+    """Adoption of a custom (Marketplace/HACS) integration version, by integration domain."""
     domains = await _async_get_json_cached(session, ANALYTICS_CUSTOM_URL, _slim_custom)
     if not domains or domain not in domains:
         return None
@@ -234,7 +234,7 @@ async def async_find_custom_integration_domain(hass: Any, repo: str) -> str | No
     """Map a GitHub owner/repo to the loaded custom integration it ships.
 
     Custom integrations point their manifest `documentation` / `issue_tracker`
-    at their repo, which is the only reliable link from a HACS update entity
+    at their repo, which is the only reliable link from a Marketplace (HACS) update entity
     back to an integration domain.
     """
     from homeassistant.loader import async_get_custom_components

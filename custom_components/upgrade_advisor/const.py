@@ -9,6 +9,9 @@ DOMAIN: Final = "upgrade_advisor"
 
 CONF_AGENT_ID: Final = "agent_id"
 CONF_SCAN_ON_UPDATE: Final = "scan_on_update_available"
+# Marketplace (HACS before Home Assistant 2026.11) component updates. The
+# stored option key keeps its original "hacs" name so existing config entries
+# keep working; only the label shown in the options flow changed.
 CONF_SCAN_HACS: Final = "scan_hacs_updates"
 CONF_CREATE_REPAIRS: Final = "create_repair_issues"
 CONF_INCLUDE_AUTOMATIONS: Final = "include_automations"
@@ -40,6 +43,11 @@ STARTUP_DELAY_SECONDS: Final = 300  # Wait 5 minutes for entities to become avai
 PENDING_STORAGE_KEY: Final = f"{DOMAIN}_pending"
 PENDING_STORAGE_VERSION: Final = 1
 PENDING_RETENTION_DAYS: Final = 14
+
+# Integration domains whose update entities track installed community
+# components: "marketplace" from Home Assistant 2026.11, "hacs" before it.
+MARKETPLACE_DOMAINS: Final = frozenset({"marketplace", "hacs"})
+MARKETPLACE_UPGRADE_TYPE: Final = "Marketplace (HACS) Component"
 
 HA_CORE_UPDATE_ENTITY: Final = "update.home_assistant_core_update"
 HA_CORE_REPO: Final = "home-assistant/core"

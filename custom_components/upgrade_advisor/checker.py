@@ -674,7 +674,7 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
             qualifier,
         )
 
-        # Also check automation entity states for friendly names matching the
+        # Also check automation entity names (State.name) matching the
         # pattern. Skipped when an entity scope is set: an automation's own
         # name or `automation.*` entity ID can never demonstrate a reference
         # to another integration's entity, so under a scope every hit here
@@ -682,11 +682,11 @@ async def _check_automation_references(hass: HomeAssistant, task: CheckTask) -> 
         entity_matches: list[str] = []
         if qualifier is None:
             for state in hass.states.async_all("automation"):
-                friendly = state.attributes.get("friendly_name", "")
-                if compiled.search(friendly, timeout=_REGEX_TIMEOUT_SECONDS) or compiled.search(
+                name = state.name
+                if compiled.search(name, timeout=_REGEX_TIMEOUT_SECONDS) or compiled.search(
                     state.entity_id, timeout=_REGEX_TIMEOUT_SECONDS
                 ):
-                    entity_matches.append(friendly or state.entity_id)
+                    entity_matches.append(name)
     except TimeoutError:
         _LOGGER.warning("Automation pattern for '%s' timed out: %s", task.title, pattern)
         return CheckResult(
@@ -746,14 +746,12 @@ async def _check_unavailable_entities(hass: HomeAssistant, task: CheckTask) -> C
         for eid in entity_ids:
             state = hass.states.get(eid)
             if state is None or state.state == "unavailable":
-                name = state.attributes.get("friendly_name", "") if state else ""
-                unavailable.append(f"{eid} ({name})" if name else eid)
+                unavailable.append(f"{eid} ({state.name})" if state else eid)
     else:
         unavailable = []
         for state in hass.states.async_all():
             if state.state == "unavailable" and state.entity_id not in diagnostic_ids:
-                name = state.attributes.get("friendly_name", "")
-                unavailable.append(f"{state.entity_id} ({name})" if name else state.entity_id)
+                unavailable.append(f"{state.entity_id} ({state.name})")
 
     diag_unavailable = _count_diagnostic_unavailable(hass, integration) if integration else 0
     scope = f" for '{integration}'" if integration else ""

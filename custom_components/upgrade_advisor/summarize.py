@@ -145,9 +145,7 @@ def async_get_automation_summaries(hass: HomeAssistant) -> str:
 
     lines: list[str] = []
     for state in automations:
-        friendly_name = state.attributes.get("friendly_name", state.entity_id)
-        current_state = state.state
-        lines.append(f"- {friendly_name} ({current_state})")
+        lines.append(f"- {state.name} ({state.state})")
 
     return "\n".join(lines)
 
